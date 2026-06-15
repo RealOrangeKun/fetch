@@ -10,13 +10,13 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "fetch";
-  version = "1.0.0-unstable-18-04-2";           # change at next release
+  version = "2.1.0";
 
   src = fetchFromGitHub {
     owner = "areofyl";
     repo = "fetch";
-    rev = "v${finalAttrs.version}";
-    hash = "sha256-20lZPymAgXmTAxxBs75E9es1ChHZ4RSS73Qb/SzYeiI=";     # change at next release
+    rev = "${finalAttrs.version}";
+    hash = "sha256-9ixx7XJcY4ktcN/lUfjvFljvHIEO2ktOebeGgL0ulHg=";
   };
 
   makeFlags = [ "PREFIX=${placeholder "out"}" ];
