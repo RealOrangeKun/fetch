@@ -60,7 +60,7 @@ You also need to import the nix package in your ```home.nix```. Check ```nix/hom
 { pkgs, inputs, ... }: 
 
 {
-  import = [ inputs.areofyl-fetch.homeManagerModules.default ];
+  imports = [ inputs.areofyl-fetch.homeManagerModules.default ];
   
   programs.fetch = {
     enable = true;
