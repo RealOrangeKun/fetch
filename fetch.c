@@ -363,7 +363,7 @@ static int is_cursor_escape(const char *p) {
 static int load_logo_ff_colored(const char *name) {
   char cmd[256];
   snprintf(cmd, sizeof(cmd),
-           "fastfetch -l %s --structure \"\" --pipe false 2>/dev/null", name);
+           "fastfetch -l %s -s break --pipe false 2>/dev/null", name);
   FILE *fp = popen(cmd, "r");
   if (!fp)
     return 0;
@@ -391,6 +391,7 @@ static int load_logo_ff_colored(const char *name) {
         break;
       }
     }
+
 
     if (len == 0 && logo_rows == 0)
       continue;
@@ -1952,11 +1953,23 @@ static void build_points(void) {
           float oy = (cy - frow) * sy;
           float zr = ih * zmax;
 
-          // Skip side layers for very light cells — they create
-          // wispy "tail" artifacts at edges during rotation
-          int layers = Z_LAYERS;
-          if (ih < 0.15f)
-            layers = 2; // front + back only
+          // Only add side layers for interior cells. Edge cells
+          // (adjacent to empty space) only get front + back to avoid
+          // "tail" artifacts during rotation.
+          int is_edge = 0;
+          for (int dr = -1; dr <= 1 && !is_edge; dr++) {
+            for (int dc = -1; dc <= 1 && !is_edge; dc++) {
+              if (dr == 0 && dc == 0)
+                continue;
+              int nr = row + dr, nc = col + dc;
+              float nh = 0;
+              if (nr >= 0 && nr < logo_rows && nc >= 0 && nc < logo_cols)
+                nh = hmap[nr][nc];
+              if (nh <= 0.0f)
+                is_edge = 1;
+            }
+          }
+          int layers = (is_edge || ih < 0.15f) ? 2 : Z_LAYERS;
 
           for (int k = 0; k < layers; k++) {
             if (idx >= MAX_POINTS)
