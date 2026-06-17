@@ -42,6 +42,8 @@ or
 paru -S fetch-git
 ```
 
+The `fetch-git` AUR package was not compromised in the AUR package hack. It is maintained and up to date.
+
 ### Nix Flake
 Add this repo to your ```flake.nix```. The package is built using the unstable channel. You can overwrite this by setting ```inputs.nixpkgs.follows = "nixpkgs"``` (if your default is 25.11).
 
