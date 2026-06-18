@@ -5,7 +5,7 @@ LDFLAGS ?=
 LDLIBS = -lm
 
 fetch: fetch.c
-	$(CC) $(CFLAGS) $(LDLIBS) $(LDFLAGS) -o $@ $<
+	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
 
 install: fetch
 	install -Dm755 fetch $(DESTDIR)$(PREFIX)/bin/fetch
