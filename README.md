@@ -67,7 +67,11 @@ You also need to import the nix package in your ```home.nix```. Check ```nix/hom
   programs.fetch = {
     enable = true;
     labelColor = "red";
-    info = [];
+    info = [
+      "os"
+      "kernel"
+      "uptime"
+    ];
     speed = 1.0;
     spin = "xy";
   };
