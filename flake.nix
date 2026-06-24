@@ -8,7 +8,7 @@
   outputs =
     {
       self,
-      nixpkgs
+      nixpkgs,
     }:
 
     let

@@ -1,4 +1,9 @@
-{ config, lib, pkgs, ... }:
+{
+  config,
+  lib,
+  pkgs,
+  ...
+}:
 
 let
   cfg = config.programs.fetch;
@@ -26,14 +31,15 @@ let
     "locale"
     "colors"
   ];
-in {
+in
+{
   options.programs.fetch = {
     enable = lib.mkEnableOption "fetch";
 
     info = lib.mkOption {
       type = lib.types.listOf (lib.types.enum infoFields);
       default = infoFields;
-      description = "Info fields to display, in order. Remove entries to hide them.";
+      description = "Info fields to display, in order. Add entries to show them.";
     };
 
     labelColor = lib.mkOption {
@@ -63,15 +69,30 @@ in {
     };
 
     light = lib.mkOption {
-      type = lib.types.nullOr (lib.types.enum [
-        "top-left" "top-right" "top" "left" "right" "front" "bottom-left" "bottom-right"
-      ]);
+      type = lib.types.nullOr (
+        lib.types.enum [
+          "top-left"
+          "top-right"
+          "top"
+          "left"
+          "right"
+          "front"
+          "bottom-left"
+          "bottom-right"
+        ]
+      );
       default = null;
       description = "Light direction for 3D shading.";
     };
 
     spin = lib.mkOption {
-      type = lib.types.nullOr (lib.types.enum [ "x" "y" "xy" ]);
+      type = lib.types.nullOr (
+        lib.types.enum [
+          "x"
+          "y"
+          "xy"
+        ]
+      );
       default = null;
       description = "Rotation axis for the 3D animation.";
     };
@@ -85,7 +106,7 @@ in {
     size = lib.mkOption {
       type = lib.types.nullOr lib.types.float;
       default = null;
-      description = "Logo scale";
+      description = "Logo scale.";
     };
 
     height = lib.mkOption {
@@ -97,26 +118,31 @@ in {
     extraConfig = lib.mkOption {
       type = lib.types.lines;
       default = "";
-      description = "Extra lines";
+      description = "Extra lines.";
     };
   };
 
+  # Generate config file
   config = lib.mkIf cfg.enable {
     home.packages = [ (pkgs.callPackage ./package.nix { }) ];
 
-    xdg.configFile."fetch/config".text = lib.concatStringsSep "\n" (
-      lib.filter (s: s != "") [
-        (lib.concatStringsSep "\n" cfg.info)
-        "label_color=${cfg.labelColor}"
-        "separator=${cfg.separator}"
-        (lib.optionalString (cfg.shading != null) "shading=${cfg.shading}")
-        (lib.optionalString (cfg.light != null)   "light=${cfg.light}")
-        (lib.optionalString (cfg.spin != null)    "spin=${cfg.spin}")
-        (lib.optionalString (cfg.speed != null)   "speed=${toString cfg.speed}")
-        (lib.optionalString (cfg.size != null)    "size=${toString cfg.size}")
-        (lib.optionalString (cfg.height != null)  "height=${toString cfg.height}")
-        cfg.extraConfig
-      ]
-    );
+    xdg.configFile."fetch/config".text =
+      let
+        fieldLines = cfg.info; # drop key
+        settingLines = lib.mapAttrsToList (key: value: "${key}=${value}") (
+          lib.filterAttrs (_: value: value != null) {
+            # filter empty values
+            label_color = cfg.labelColor;
+            separator = cfg.separator;
+            shading = cfg.shading;
+            light = cfg.light;
+            spin = cfg.spin;
+            speed = if cfg.speed != null then toString cfg.speed else null;
+            size = if cfg.size != null then toString cfg.size else null;
+            height = if cfg.height != null then toString cfg.height else null;
+          }
+        );
+      in
+      lib.concatStringsSep "\n" (fieldLines ++ settingLines) + "\n" + cfg.extraConfig; # extraConfig last to limit user error
   };
 }
