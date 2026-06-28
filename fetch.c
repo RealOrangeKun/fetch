@@ -2306,25 +2306,16 @@ int main(int argc, char **argv) {
       load_default_logo();
     strncpy(distro, logo_name, sizeof(distro) - 1);
   } else {
-    // Try logo.txt first for distro hint, then detect
-    load_logo_file();
-    if (file_distro[0]) {
+    // Try logo.txt first
+    int has_custom_logo = load_logo_file();
+    if (file_distro[0])
       strncpy(distro, file_distro, sizeof(distro) - 1);
-    } else
+    else
       detect_distro(distro, sizeof(distro));
 
-    // Try fastfetch for colored logo (prefer over plain logo.txt)
-    int got_logo = 0;
-    if (distro[0]) {
-      // Reset logo state to try fastfetch
-      int saved_rows = logo_rows;
-      char(*saved_data)[512] = malloc(logo_rows * 512);
-      if (saved_data) {
-      for (int i = 0; i < saved_rows; i++)
-        memcpy(saved_data[i], logo_data[i], 512);
-      logo_rows = 0;
-      logo_cols = 0;
-
+    // Only try fastfetch if no custom logo.txt was loaded
+    int got_logo = has_custom_logo;
+    if (!got_logo && distro[0]) {
       got_logo = load_logo_fastfetch(distro);
       if (!got_logo && distro_id_like[0]) {
         char like_copy[64];
@@ -2333,19 +2324,10 @@ int main(int argc, char **argv) {
         char *tok = strtok(like_copy, " ");
         while (tok && !got_logo) {
           got_logo = load_logo_fastfetch(tok);
-          if (got_logo) {
+          if (got_logo)
             strncpy(distro, tok, sizeof(distro) - 1);
-          }
           tok = strtok(NULL, " ");
         }
-      }
-      if (!got_logo) {
-        // Restore logo.txt data
-        logo_rows = saved_rows;
-        for (int i = 0; i < saved_rows; i++)
-          memcpy(logo_data[i], saved_data[i], 512);
-      }
-      free(saved_data);
       }
     }
     if (!got_logo && logo_rows == 0) {
