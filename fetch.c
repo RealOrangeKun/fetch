@@ -6,6 +6,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <arpa/inet.h>
+#include <ifaddrs.h>
+#include <net/if.h>
 #include <sys/ioctl.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
@@ -992,15 +995,53 @@ static void gather_uptime(void) {
   add_info("Uptime", "%s", val);
 }
 
-static int count_dir_entries(const char *path) {
+// Count subdirectories in a path (non-recursive)
+static int count_subdirs(const char *path) {
+  DIR *d = opendir(path);
+  if (!d)
+    return 0;
   int count = 0;
-  FILE *fp = popen(path, "r");
+  struct dirent *ent;
+  while ((ent = readdir(d))) {
+    if (ent->d_name[0] == '.')
+      continue;
+    count++;
+  }
+  closedir(d);
+  return count;
+}
+
+// Count packages in emerge-style two-level dir (category/package)
+static int count_emerge_pkgs(void) {
+  DIR *d = opendir("/var/db/pkg");
+  if (!d)
+    return 0;
+  int count = 0;
+  struct dirent *cat;
+  while ((cat = readdir(d))) {
+    if (cat->d_name[0] == '.')
+      continue;
+    char path[256];
+    snprintf(path, sizeof(path), "/var/db/pkg/%s", cat->d_name);
+    count += count_subdirs(path);
+  }
+  closedir(d);
+  return count;
+}
+
+// Count lines in a file (for dpkg status, apk installed)
+static int count_file_lines(const char *path, const char *prefix) {
+  FILE *fp = fopen(path, "r");
   if (!fp)
     return 0;
+  int count = 0;
   char buf[512];
-  while (fgets(buf, sizeof(buf), fp))
-    count++;
-  pclose(fp);
+  int plen = prefix ? strlen(prefix) : 0;
+  while (fgets(buf, sizeof(buf), fp)) {
+    if (!prefix || strncmp(buf, prefix, plen) == 0)
+      count++;
+  }
+  fclose(fp);
   return count;
 }
 
@@ -1009,37 +1050,30 @@ static void gather_packages(void) {
   int n;
 
   // emerge (Gentoo)
-  n = count_dir_entries("ls -d /var/db/pkg/*/* 2>/dev/null");
-  if (n > 0) {
+  n = count_emerge_pkgs();
+  if (n > 0)
     snprintf(val, sizeof(val), "%d (emerge)", n);
-  }
   // pacman (Arch)
   if (!val[0]) {
-    n = count_dir_entries("ls -d /var/lib/pacman/local/*-* 2>/dev/null");
-    if (n > 0)
-      snprintf(val, sizeof(val), "%d (pacman)", n);
+    n = count_subdirs("/var/lib/pacman/local");
+    if (n > 1) // -1 for ALPM_DB_VERSION
+      snprintf(val, sizeof(val), "%d (pacman)", n - 1);
   }
   // dpkg (Debian/Ubuntu)
   if (!val[0]) {
-    n = count_dir_entries("dpkg-query -f '.\n' -W 2>/dev/null");
+    n = count_file_lines("/var/lib/dpkg/status", "Package:");
     if (n > 0)
       snprintf(val, sizeof(val), "%d (dpkg)", n);
   }
-  // rpm (Fedora/RHEL)
-  if (!val[0]) {
-    n = count_dir_entries("rpm -qa 2>/dev/null");
-    if (n > 0)
-      snprintf(val, sizeof(val), "%d (rpm)", n);
-  }
   // xbps (Void)
   if (!val[0]) {
-    n = count_dir_entries("xbps-query -l 2>/dev/null");
+    n = count_subdirs("/var/db/xbps");
     if (n > 0)
       snprintf(val, sizeof(val), "%d (xbps)", n);
   }
   // apk (Alpine)
   if (!val[0]) {
-    n = count_dir_entries("apk list --installed 2>/dev/null");
+    n = count_file_lines("/lib/apk/db/installed", "P:");
     if (n > 0)
       snprintf(val, sizeof(val), "%d (apk)", n);
   }
@@ -1145,20 +1179,31 @@ static void gather_display(void) {
   }
   closedir(d);
 
-  // Fallback for drivers that don't expose per-connector modes.
+  // Fallback: read first mode from any card
   if (!emitted) {
-    FILE *fp = popen("cat /sys/class/drm/card*/modes 2>/dev/null", "r");
-    if (!fp)
-      return;
-    char buf[64] = "";
-    if (fgets(buf, sizeof(buf), fp)) {
-      int l = strlen(buf);
-      while (l > 0 && (buf[l - 1] == '\n' || buf[l - 1] == '\r'))
-        buf[--l] = '\0';
-      if (buf[0])
-        add_info("Display", "%s", buf);
+    d = opendir("/sys/class/drm");
+    if (!d) return;
+    while ((ent = readdir(d))) {
+      if (strncmp(ent->d_name, "card", 4) != 0)
+        continue;
+      char path[256];
+      snprintf(path, sizeof(path), "/sys/class/drm/%s/modes", ent->d_name);
+      FILE *fp = fopen(path, "r");
+      if (!fp)
+        continue;
+      char mode[32] = "";
+      if (fgets(mode, sizeof(mode), fp)) {
+        int l = strlen(mode);
+        while (l > 0 && (mode[l - 1] == '\n' || mode[l - 1] == '\r'))
+          mode[--l] = '\0';
+      }
+      fclose(fp);
+      if (mode[0]) {
+        add_info("Display", "%s", mode);
+        break;
+      }
     }
-    pclose(fp);
+    closedir(d);
   }
 }
 
@@ -1179,25 +1224,37 @@ static void gather_wm(void) {
   if (hyprland)
     strcpy(wm, "Hyprland");
 
-  // 2. Try process list for known WMs
+  // 2. Try process list by scanning /proc/*/comm
   if (!wm[0]) {
-    FILE *fp = popen("ps -e -o comm= 2>/dev/null", "r");
-    if (fp) {
-      char buf[64];
-      while (fgets(buf, sizeof(buf), fp)) {
-        int len = strlen(buf);
-        while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
-          buf[--len] = '\0';
-        if (strcmp(buf, "dwl") == 0 || strcmp(buf, "sway") == 0 ||
-            strcmp(buf, "river") == 0 || strcmp(buf, "labwc") == 0 ||
-            strcmp(buf, "weston") == 0 || strcmp(buf, "i3") == 0 ||
-            strcmp(buf, "bspwm") == 0 || strcmp(buf, "openbox") == 0 ||
-            strcmp(buf, "awesome") == 0 || strcmp(buf, "dwm") == 0) {
-          strncpy(wm, buf, sizeof(wm) - 1);
-          break;
+    static const char *known_wms[] = {"dwl",   "sway",    "river", "labwc",
+                                      "weston", "i3",      "bspwm", "openbox",
+                                      "awesome", "dwm",    NULL};
+    DIR *proc = opendir("/proc");
+    if (proc) {
+      struct dirent *ent;
+      while ((ent = readdir(proc)) && !wm[0]) {
+        if (ent->d_name[0] < '1' || ent->d_name[0] > '9')
+          continue;
+        char path[64];
+        snprintf(path, sizeof(path), "/proc/%s/comm", ent->d_name);
+        FILE *fp = fopen(path, "r");
+        if (!fp)
+          continue;
+        char comm[64] = "";
+        if (fgets(comm, sizeof(comm), fp)) {
+          int len = strlen(comm);
+          while (len > 0 && (comm[len - 1] == '\n' || comm[len - 1] == '\r'))
+            comm[--len] = '\0';
+          for (int i = 0; known_wms[i]; i++) {
+            if (strcmp(comm, known_wms[i]) == 0) {
+              strncpy(wm, comm, sizeof(wm) - 1);
+              break;
+            }
+          }
         }
+        fclose(fp);
       }
-      pclose(fp);
+      closedir(proc);
     }
   }
 
@@ -1291,17 +1348,30 @@ static void gather_cpu(void) {
   }
 
   // Get max frequency from cpufreq
-  fp = popen("cat /sys/devices/system/cpu/cpufreq/policy*/cpuinfo_max_freq "
-             "2>/dev/null | sort -rn | head -1",
-             "r");
-  if (fp) {
-    char buf[32];
-    if (fgets(buf, sizeof(buf), fp)) {
-      long khz = atol(buf);
-      if (khz > 0)
-        max_ghz = khz / 1000000.0f;
+  {
+    DIR *cpufreq = opendir("/sys/devices/system/cpu/cpufreq");
+    if (cpufreq) {
+      struct dirent *ent;
+      long max_khz = 0;
+      while ((ent = readdir(cpufreq))) {
+        if (strncmp(ent->d_name, "policy", 6) != 0)
+          continue;
+        char path[128];
+        snprintf(path, sizeof(path),
+                 "/sys/devices/system/cpu/cpufreq/%s/cpuinfo_max_freq",
+                 ent->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f)
+          continue;
+        long khz = 0;
+        if (fscanf(f, "%ld", &khz) == 1 && khz > max_khz)
+          max_khz = khz;
+        fclose(f);
+      }
+      closedir(cpufreq);
+      if (max_khz > 0)
+        max_ghz = max_khz / 1000000.0f;
     }
-    pclose(fp);
   }
 
   if (name[0]) {
@@ -1549,28 +1619,22 @@ static void gather_disk(void) {
   int pct = (int)(used_gib * 100 / total_gib);
   const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
 
-  // Get filesystem type from df
+  // Get filesystem type from /proc/mounts
   char fstype[32] = "";
-  FILE *fp = popen("df -T / 2>/dev/null | tail -1", "r");
+  FILE *fp = fopen("/proc/mounts", "r");
   if (fp) {
-    char buf[256];
-    if (fgets(buf, sizeof(buf), fp)) {
-      // Format: /dev/xxx ext4 ...
-      char *p = buf;
-      while (*p && *p != ' ')
-        p++; // skip device
-      while (*p == ' ')
-        p++;
-      char *end = p;
-      while (*end && *end != ' ')
-        end++;
-      int len = end - p;
-      if (len > 0 && len < (int)sizeof(fstype)) {
-        memcpy(fstype, p, len);
-        fstype[len] = '\0';
+    char buf[512];
+    while (fgets(buf, sizeof(buf), fp)) {
+      // Format: device mountpoint fstype options ...
+      char dev[128], mnt[128], fs[32];
+      if (sscanf(buf, "%127s %127s %31s", dev, mnt, fs) == 3) {
+        if (strcmp(mnt, "/") == 0) {
+          strncpy(fstype, fs, sizeof(fstype) - 1);
+          break;
+        }
       }
     }
-    pclose(fp);
+    fclose(fp);
   }
 
   if (fstype[0])
@@ -1583,30 +1647,30 @@ static void gather_disk(void) {
 
 static void gather_battery(void) {
   // Find first battery in /sys/class/power_supply
-  FILE *fp = popen("ls /sys/class/power_supply/ 2>/dev/null", "r");
-  if (!fp)
-    return;
   char bat_name[64] = "";
-  char buf[64];
-  while (fgets(buf, sizeof(buf), fp)) {
-    int len = strlen(buf);
-    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
-      buf[--len] = '\0';
-    // Check if it's a battery (has capacity file)
+  DIR *psd = opendir("/sys/class/power_supply");
+  if (!psd)
+    return;
+  struct dirent *psent;
+  while ((psent = readdir(psd))) {
+    if (psent->d_name[0] == '.')
+      continue;
     char path[256];
-    snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity", buf);
+    snprintf(path, sizeof(path), "/sys/class/power_supply/%s/capacity",
+             psent->d_name);
     FILE *test = fopen(path, "r");
     if (test) {
       fclose(test);
-      strncpy(bat_name, buf, sizeof(bat_name) - 1);
+      strncpy(bat_name, psent->d_name, sizeof(bat_name) - 1);
       break;
     }
   }
-  pclose(fp);
+  closedir(psd);
   if (!bat_name[0])
     return;
 
   char path[256];
+  FILE *fp;
   int capacity = -1;
   char status[32] = "";
 
@@ -1777,52 +1841,40 @@ static void gather_terminal(void) {
 }
 
 static void gather_ip(void) {
-  FILE *fp =
-      popen("ip -4 -o addr show scope global 2>/dev/null | head -1", "r");
-  if (!fp)
+  struct ifaddrs *ifa_list, *ifa;
+  if (getifaddrs(&ifa_list) != 0)
     return;
-  char buf[256];
-  if (fgets(buf, sizeof(buf), fp)) {
-    // Format: "2: wld0    inet 192.168.1.160/24 ..."
-    char iface[32] = "", addr[64] = "";
-    char *inet = strstr(buf, "inet ");
-    if (inet) {
-      inet += 5;
-      char *space = strchr(inet, ' ');
-      if (space) {
-        int len = space - inet;
-        if (len < (int)sizeof(addr)) {
-          memcpy(addr, inet, len);
-          addr[len] = '\0';
-        }
-      }
-      // Get interface name (second field)
-      char *p = buf;
-      // Skip index
-      while (*p && *p != ' ')
-        p++;
-      while (*p == ' ')
-        p++;
-      char *end = p;
-      while (*end && *end != ' ')
-        end++;
-      int ilen = end - p;
-      if (ilen < (int)sizeof(iface)) {
-        memcpy(iface, p, ilen);
-        iface[ilen] = '\0';
+  for (ifa = ifa_list; ifa; ifa = ifa->ifa_next) {
+    if (!ifa->ifa_addr || ifa->ifa_addr->sa_family != AF_INET)
+      continue;
+    // Skip loopback
+    if (strcmp(ifa->ifa_name, "lo") == 0)
+      continue;
+    struct sockaddr_in *sa = (struct sockaddr_in *)ifa->ifa_addr;
+    char addr[INET_ADDRSTRLEN];
+    inet_ntop(AF_INET, &sa->sin_addr, addr, sizeof(addr));
+    // Get prefix length from netmask
+    struct sockaddr_in *mask = (struct sockaddr_in *)ifa->ifa_netmask;
+    unsigned int bits = 0;
+    if (mask) {
+      unsigned int m = ntohl(mask->sin_addr.s_addr);
+      while (m & 0x80000000) {
+        bits++;
+        m <<= 1;
       }
     }
-    if (addr[0]) {
-      if (iface[0]) {
-        char lbl[64];
-        snprintf(lbl, sizeof(lbl), "Local IP (%s)", iface);
-        add_info(lbl, "%s", addr);
-      } else {
-        add_info("Local IP", "%s", addr);
-      }
+    char lbl[64];
+    snprintf(lbl, sizeof(lbl), "Local IP (%s)", ifa->ifa_name);
+    if (bits > 0) {
+      char full[80];
+      snprintf(full, sizeof(full), "%s/%u", addr, bits);
+      add_info(lbl, "%s", full);
+    } else {
+      add_info(lbl, "%s", addr);
     }
+    break; // first non-loopback interface
   }
-  pclose(fp);
+  freeifaddrs(ifa_list);
 }
 
 static void gather_locale(void) {
