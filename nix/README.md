@@ -1,4 +1,38 @@
-# Home Module Options
+# Flake & Home-module
+## Flake Install
+```nix
+inputs = {
+  ...
+  areofyl-fetch.url = "github:areofyl/fetch";
+  ...
+}
+```
+
+## Home-manager
+You also need to import the nix package in your ```home.nix```. 
+
+```nix
+{ pkgs, inputs, ... }: 
+
+{
+  imports = [ inputs.areofyl-fetch.homeManagerModules.default ];
+  
+  programs.fetch = {
+    enable = true;
+    labelColor = "red";
+    info = [
+      "os"
+      "kernel"
+      "uptime"
+    ];
+    speed = 1.0;
+    spin = "xy";
+  };
+  
+}
+```
+
+# Examples and home-manager options
 Here is a default configuration:
 ```nix
 { pkgs, inputs, ... }: 

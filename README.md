@@ -42,39 +42,22 @@ paru -S fetch-git
 
 The `fetch-git` AUR package was not compromised in the AUR package hack. It is maintained and up to date.
 
-### Nix Flake
-Add this repo to your ```flake.nix```. The package is built using the unstable channel. You can overwrite this by setting ```inputs.nixpkgs.follows = "nixpkgs"``` (if your default is 26.05).
+### Nix
+Fetch is available in **[nixpkgs unstable](https://search.nixos.org/packages?channel=unstable&query=fetch#show=fetch)**, or as a [flake](https://github.com/areofyl/fetch/tree/main/nix).
 
-```nix
-inputs = {
-  ...
-areofyl-fetch.url = "github:areofyl/fetch";
-  ...
-}
+**Try out fetch!**
+```
+nix-shell -p fetch
 ```
 
-#### Home-manager
-You also need to import the nix package in your ```home.nix```. [Here are all the available options](https://github.com/areofyl/fetch/tree/main/nix).
+Add to your ```configuration.nix``` or ```home.nix```.
 
 ```nix
-{ pkgs, inputs, ... }: 
-
-{
-  imports = [ inputs.areofyl-fetch.homeManagerModules.default ];
-  
-  programs.fetch = {
-    enable = true;
-    labelColor = "red";
-    info = [
-      "os"
-      "kernel"
-      "uptime"
-    ];
-    speed = 1.0;
-    spin = "xy";
-  };
-  
-}
+environment.systemPackages = [
+  ...
+  pkgs.fetch
+  ...
+];
 ```
 
 ### Homebrew (macOS)
