@@ -67,14 +67,7 @@ brew install fetch-git
 ```
 
 ### Fedora Linux
-You can install `fetch` from the official COPR repository:
-
-```bash
-sudo dnf copr enable areofyl/fetch
-sudo dnf install fetch
-```
-
-Or build and install from source:
+Build and install from source:
 
 ```bash
 sudo dnf install gcc make
