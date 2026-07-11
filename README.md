@@ -66,6 +66,23 @@ brew tap areofyl/fetch
 brew install fetch-git
 ```
 
+### Fedora Linux
+Build and install from source:
+
+```bash
+sudo dnf install gcc make
+make
+sudo make install
+```
+
+Or build an RPM package locally:
+
+```bash
+sudo dnf install @development-tools
+rpmbuild -ba fetch.spec
+sudo dnf install ~/rpmbuild/RPMS/*/fetch-*.rpm
+```
+
 ### Gentoo Linux (GURU)
 You can install `fetch` from the GURU repository using:
 

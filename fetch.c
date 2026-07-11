@@ -1065,6 +1065,19 @@ static void gather_packages(void) {
     if (n > 0)
       snprintf(val, sizeof(val), "%d (dpkg)", n);
   }
+  // rpm/dnf (Fedora, RHEL, openSUSE, etc.)
+  if (!val[0]) {
+    FILE *fp = popen("rpm -qa 2>/dev/null", "r");
+    if (fp) {
+      n = 0;
+      char buf[256];
+      while (fgets(buf, sizeof(buf), fp))
+        n++;
+      pclose(fp);
+      if (n > 0)
+        snprintf(val, sizeof(val), "%d (dnf)", n);
+    }
+  }
   // xbps (Void)
   if (!val[0]) {
     n = count_subdirs("/var/db/xbps");
