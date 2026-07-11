@@ -66,9 +66,18 @@ brew tap areofyl/fetch
 brew install fetch-git
 ```
 
-### Fedora Linux (RPM)
+### Fedora Linux
+You can install `fetch` from COPR:
 
 ```bash
+sudo dnf copr enable realorangekun/fetch
+sudo dnf install fetch
+```
+
+Or build an RPM package locally:
+
+```bash
+sudo dnf install @development-tools
 rpmbuild -ba fetch.spec
 sudo dnf install ~/rpmbuild/RPMS/*/fetch-*.rpm
 ```
