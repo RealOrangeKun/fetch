@@ -15,10 +15,11 @@
 #include <sys/utsname.h>
 #include <termios.h>
 #include <unistd.h>
+#include <time.h>
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
-#include <libproc.h>
+#include <sys/mount.h>
 #include <IOKit/ps/IOPowerSources.h>
 #include <IOKit/ps/IOPSKeys.h>
 #include <CoreFoundation/CoreFoundation.h>
@@ -1608,6 +1609,7 @@ static void gather_cpu(void) {
 // Example input: "01:00.0 VGA compatible controller: NVIDIA Corporation
 // AD106M [GeForce RTX 4070 Max-Q / Mobile] (rev a1)"
 // We prefer the bracket content; otherwise the chunk after "Corporation ".
+#ifndef __APPLE__
 static int gpu_lookup_lspci(const char *pci_id, char *out, int outlen) {
   if (!pci_id || !pci_id[0])
     return 0;
@@ -1663,6 +1665,7 @@ static int gpu_lookup_lspci(const char *pci_id, char *out, int outlen) {
   pclose(fp);
   return ok;
 }
+#endif
 
 static void gather_gpu(void) {
 #ifdef __APPLE__
@@ -1859,9 +1862,8 @@ static void gather_swap(void) {
   if (!sysctl_str("vm.swapusage", swapstr, sizeof(swapstr)))
     return;
   float total_mb = 0, used_mb = 0;
-  sscanf(swapstr, "swap on %*s size %fM, allocated %fM", &total_mb, &used_mb);
+  sscanf(swapstr, "swap on %*s (total %fM %*s %fM", &total_mb, &used_mb);
   if (total_mb <= 0) return;
-  float free_mb = total_mb - used_mb;
   int pct = (int)(used_mb * 100 / total_mb);
   const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
   add_info("Swap", "%.2f MiB / %.2f MiB (\033[%sm%d%%\033[0m)",

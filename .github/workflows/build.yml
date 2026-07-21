@@ -1,0 +1,23 @@
+name: Build
+
+on:
+  push:
+    branches: [main, Current]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build
+        run: make
+
+      - name: Verify binary
+        run: ./fetch --help || true

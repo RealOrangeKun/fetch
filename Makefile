@@ -1,8 +1,13 @@
 CC ?= cc
 CFLAGS ?= -O2
 PREFIX ?= /usr/local
-LDFLAGS ?=
+LDFLAGS=
 LDLIBS = -lm
+
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+  LDLIBS += -framework IOKit -framework CoreFoundation
+endif
 
 fetch: fetch.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -o $@ $< $(LDLIBS)
