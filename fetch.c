@@ -9,6 +9,7 @@
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
+#include <netinet/in.h>
 #include <sys/ioctl.h>
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
@@ -1113,7 +1114,37 @@ static void gather_packages(void) {
 }
 
 static void gather_shell(void) {
-  char *shell = getenv("SHELL");
+  char *shell = NULL;
+  char shell_buf[64] = "";
+
+  // Try to detect the actual running shell from parent process,
+  // since $SHELL is the login shell which may differ (e.g. fish launched
+  // from bash)
+  {
+    char path[64];
+    snprintf(path, sizeof(path), "/proc/%d/comm", getppid());
+    FILE *fp = fopen(path, "r");
+    if (fp) {
+      if (fgets(shell_buf, sizeof(shell_buf), fp)) {
+        int len = strlen(shell_buf);
+        while (len > 0 && (shell_buf[len - 1] == '\n' || shell_buf[len - 1] == '\r'))
+          shell_buf[--len] = '\0';
+        // Only use if it looks like a shell
+        if (strcmp(shell_buf, "bash") == 0 || strcmp(shell_buf, "zsh") == 0 ||
+            strcmp(shell_buf, "fish") == 0 || strcmp(shell_buf, "dash") == 0 ||
+            strcmp(shell_buf, "sh") == 0 || strcmp(shell_buf, "nu") == 0 ||
+            strcmp(shell_buf, "elvish") == 0 || strcmp(shell_buf, "tcsh") == 0 ||
+            strcmp(shell_buf, "csh") == 0 || strcmp(shell_buf, "xonsh") == 0 ||
+            strcmp(shell_buf, "ksh") == 0 || strcmp(shell_buf, "ion") == 0)
+          shell = shell_buf;
+      }
+      fclose(fp);
+    }
+  }
+
+  // Fall back to $SHELL (login shell)
+  if (!shell)
+    shell = getenv("SHELL");
   if (!shell)
     return;
 
