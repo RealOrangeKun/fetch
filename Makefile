@@ -1,7 +1,7 @@
 CC ?= cc
 CFLAGS ?= -O2
 PREFIX ?= /usr/local
-LDFLAGS=
+LDFLAGS ?=
 LDLIBS = -lm
 
 UNAME_S := $(shell uname -s)
