@@ -1092,6 +1092,23 @@ static void gather_packages(void) {
       snprintf(val, sizeof(val), "%d (apk)", n);
   }
 
+  n = 0;
+  FILE *flatpak_fp = popen("flatpak list --columns=ref 2>/dev/null", "r");
+  if (flatpak_fp) {
+    char buf[256];
+    while (fgets(buf, sizeof(buf), flatpak_fp))
+      n++;
+    pclose(flatpak_fp);
+  }
+  if (n > 0) {
+    char flatpak_val[32];
+    snprintf(flatpak_val, sizeof(flatpak_val), "%d (flatpak)", n);
+    if (val[0])
+      snprintf(val + strlen(val), sizeof(val) - strlen(val), ", %s", flatpak_val);
+    else
+      snprintf(val, sizeof(val), "%s", flatpak_val);
+  }
+
   if (val[0])
     add_info("Packages", "%s", val);
 }
