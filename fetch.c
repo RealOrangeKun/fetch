@@ -1983,15 +1983,15 @@ static void gather_battery(void) {
   if (!src) { CFRelease(sources); CFRelease(info); return; }
 
   int capacity = -1;
-  CFNumberRef capRef = CFDictionaryGetValue(src, kIOPSCurrentCapacityKey);
+  CFNumberRef capRef = CFDictionaryGetValue(src, CFSTR(kIOPSCurrentCapacityKey));
   if (capRef) CFNumberGetValue(capRef, kCFNumberIntType, &capacity);
 
   int isCharging = 0;
-  CFBooleanRef chgRef = CFDictionaryGetValue(src, kIOPSIsChargingKey);
+  CFBooleanRef chgRef = CFDictionaryGetValue(src, CFSTR(kIOPSIsChargingKey));
   if (chgRef) isCharging = CFBooleanGetValue(chgRef);
 
   int timeToEmpty = -1;
-  CFNumberRef tteRef = CFDictionaryGetValue(src, kIOPSTimeToEmptyKey);
+  CFNumberRef tteRef = CFDictionaryGetValue(src, CFSTR(kIOPSTimeToEmptyKey));
   if (tteRef) CFNumberGetValue(tteRef, kCFNumberIntType, &timeToEmpty);
 
   CFRelease(sources);
