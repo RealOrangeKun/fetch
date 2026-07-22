@@ -1,5 +1,5 @@
 Name:           fetch
-Version:        2.1.0
+Version:        2.2.0
 Release:        1%{?dist}
 Summary:        Animated 3D fetch tool for your terminal
 
@@ -32,5 +32,8 @@ config — no external dependencies required.
 %{_bindir}/fetch
 
 %changelog
+* Wed Jul 22 2026 Youssef Tarek <amazingritro66@gmail.com> - 2.2.0-1
+- Update to 2.2.0
+
 * Mon Jun 09 2026 Youssef Tarek <amazingritro66@gmail.com> - 2.1.0-1
 - Initial RPM package for Fedora
