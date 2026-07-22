@@ -127,16 +127,17 @@ All system info is gathered natively — no fastfetch or neofetch needed:
 - **Kernel** — `uname()`
 - **Uptime** — `/proc/uptime`
 - **Packages** — emerge, pacman, dpkg, rpm, xbps, apk
-- **Shell** — `$SHELL` + version
-- **Display** — `/sys/class/drm/card*/modes`
-- **WM** — env vars + process detection
-- **Theme/Icons/Font** — `~/.config/gtk-3.0/settings.ini`
-- **CPU** — `/proc/cpuinfo` or device-tree (Apple Silicon)
-- **GPU** — DRM device uevent
-- **Memory/Swap** — `/proc/meminfo`
-- **Disk** — `statvfs()`
-- **Battery** — `/sys/class/power_supply` (energy_now/energy_full)
-- **Local IP** — `ip addr`
+- **Shell** — parent process detection (not just `$SHELL`)
+- **Display** — per-connector DRM enumeration (multi-monitor)
+- **WM** — process scanning + DE-to-WM mapping
+- **Theme/Icons/Font** — `~/.config/gtk-3.0/settings.ini` (Linux), `defaults read` (macOS)
+- **CPU** — `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
+- **GPU** — DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
+- **Memory/Swap** — `/proc/meminfo` (Linux), `vm_stat` (macOS)
+- **Disk** — `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS)
+- **Battery** — `energy_now/energy_full` (Linux), IOKit (macOS)
+- **Packages** — emerge, pacman, dpkg, rpm/dnf, xbps, apk, flatpak, brew
+- **Local IP** — `getifaddrs()`
 
 Stats like memory, battery, and uptime update in real-time while the logo spins.
 
@@ -174,11 +175,16 @@ colors
 # separator=─           (character for the title separator)
 # shading=.,-~:;=!*#$@  (characters for 3D shading, supports UTF-8)
 
+# logo colors (override distro defaults)
+# logo_outer=magenta    (outer/heavy character color)
+# logo_inner=white      (inner/light character color)
+
 # 3d
 # light=top-left        (top-left, top-right, top, left, right, front, bottom-left, bottom-right)
 # spin=xy               (x, y, or xy)
 # speed=1.0             (rotation speed)
 # size=1.0              (logo scale, e.g. 2.0 for double size)
+# depth=1.0             (3D extrusion depth, e.g. 3.0 for chunkier look)
 # height=36             (override render height in rows)
 ```
 
@@ -191,6 +197,7 @@ colors
 | `--rotate-y` | Lock rotation to Y axis only |
 | `-s`, `--speed <float>` | Speed multiplier (default 1.0) |
 | `--size <float>` | Scale the logo (e.g. 2.0 for double size) |
+| `--depth <float>` | Scale the 3D depth (default 1.0) |
 | `--height <n>` | Override render height in rows |
 | `--no-info` | Just the logo, no system info |
 | `--no-color` | Disable coloring |
