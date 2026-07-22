@@ -719,6 +719,7 @@ static int config_spin_x = -1;    // -1 = use flag/default
 static int config_spin_y = -1;
 static char config_shading[128] = "";
 static char config_separator[8] = "-";
+static float config_depth = 1.0f;
 
 // Light direction presets
 static float light_x = 0.4082f, light_y = 0.8165f, light_z = -0.4082f;
@@ -842,6 +843,12 @@ static void load_config(void) {
     }
     if (strncmp(line, "separator=", 10) == 0) {
       strncpy(config_separator, line + 10, sizeof(config_separator) - 1);
+      continue;
+    }
+    if (strncmp(line, "depth=", 6) == 0) {
+      config_depth = atof(line + 6);
+      if (config_depth < 0.1f) config_depth = 0.1f;
+      if (config_depth > 10.0f) config_depth = 10.0f;
       continue;
     }
     if (strncmp(line, "light=", 6) == 0) {
@@ -2386,7 +2393,7 @@ static void build_points(void) {
   const float sy = 0.14f;
   const float cx = (logo_cols - 1) * 0.5f;
   const float cy = (logo_rows - 1) * 0.5f;
-  const float zmax = 0.18f;
+  const float zmax = 0.18f * config_depth;
   int Z_LAYERS = (int)(6 * size_scale);
   if (Z_LAYERS < 6)
     Z_LAYERS = 6;
@@ -2657,6 +2664,7 @@ int main(int argc, char **argv) {
           "  -s, --speed <float>       Speed multiplier (default 1.0)\n"
           "  --size <float>            Scale the logo (e.g. 2.0 for double "
           "size)\n"
+          "  --depth <float>           Scale the 3D depth (default 1.0)\n"
           "  --height <n>              Override render height in rows\n"
           "  --no-info                 Just the logo, no system info\n"
           "  --no-color                Disable logo coloring\n"
@@ -2725,6 +2733,12 @@ int main(int argc, char **argv) {
         size_scale = 0.5f;
       if (size_scale > 5.0f)
         size_scale = 5.0f;
+    } else if (strcmp(argv[i], "--depth") == 0 && i + 1 < argc) {
+      config_depth = atof(argv[++i]);
+      if (config_depth < 0.1f)
+        config_depth = 0.1f;
+      if (config_depth > 10.0f)
+        config_depth = 10.0f;
     }
   }
 
