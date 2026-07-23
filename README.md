@@ -99,6 +99,23 @@ rpmbuild -ba fetch.spec
 sudo zypper install ~/rpmbuild/RPMS/*/fetch-*.rpm
 ```
 
+### Ubuntu / Debian
+You can install `fetch` from the PPA:
+
+```bash
+sudo add-apt-repository ppa:realorangekun/fetch
+sudo apt update
+sudo apt install fetch
+```
+
+Or build a `.deb` package locally:
+
+```bash
+sudo apt install build-essential devscripts debhelper
+dpkg-buildpackage -us -uc -b
+sudo apt install ../fetch_*.deb
+```
+
 ### Gentoo Linux (GURU)
 You can install `fetch` from the GURU repository using:
 
