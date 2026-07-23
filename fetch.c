@@ -1,11 +1,15 @@
 #include <dirent.h>
 #include <math.h>
-#include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
+#include <unistd.h>
+
+#ifndef _WIN32
+#include <poll.h>
 #include <arpa/inet.h>
 #include <ifaddrs.h>
 #include <net/if.h>
@@ -14,8 +18,7 @@
 #include <sys/statvfs.h>
 #include <sys/utsname.h>
 #include <termios.h>
-#include <unistd.h>
-#include <time.h>
+#endif
 
 #ifdef __APPLE__
 #include <sys/sysctl.h>
@@ -25,13 +28,38 @@
 #include <CoreFoundation/CoreFoundation.h>
 #endif
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <windows.h>
+#include <conio.h>
+#include <iphlpapi.h>
+#include <tlhelp32.h>
+#include <io.h>
+#endif
 
+#ifdef _WIN32
+#define NULL_DEVICE "nul"
+#else
+#define NULL_DEVICE "/dev/null"
+#endif
+
+#ifndef _WIN32
 static struct termios orig_termios;
+#else
+static DWORD orig_console_mode;
+#endif
 static int termios_saved = 0;
 
 static void cleanup(void) {
-  if (termios_saved)
+  if (termios_saved) {
+#ifndef _WIN32
     tcsetattr(STDIN_FILENO, TCSANOW, &orig_termios);
+#else
+    SetConsoleMode(GetStdHandle(STD_INPUT_HANDLE), orig_console_mode);
+#endif
+  }
   printf("\033[?25h");
   fflush(stdout);
 }
@@ -44,21 +72,31 @@ static void handle_signal(int sig) {
 
 static volatile sig_atomic_t term_resized = 0;
 
+#ifndef _WIN32
 static void handle_winch(int sig) {
   (void)sig;
   term_resized = 1;
 }
+#endif
 
 static void get_term_size(int *rows, int *cols) {
-  struct winsize ws;
   *rows = 0;
   *cols = 0;
+#ifndef _WIN32
+  struct winsize ws;
   if (ioctl(STDOUT_FILENO, TIOCGWINSZ, &ws) == 0) {
     if (ws.ws_row > 0)
       *rows = ws.ws_row;
     if (ws.ws_col > 0)
       *cols = ws.ws_col;
   }
+#else
+  CONSOLE_SCREEN_BUFFER_INFO csbi;
+  if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+    *rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+    *cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+  }
+#endif
 }
 
 #define ANIM_WIDTH 60
@@ -207,6 +245,83 @@ static int sysctl_int(const char *name) {
   if (sysctlbyname(name, &val, &len, NULL, 0) == 0)
     return val;
   return 0;
+}
+#endif
+
+#ifdef _WIN32
+static int reg_read_str(HKEY root, const char *subkey, const char *value,
+                        char *out, int maxlen) {
+  HKEY key;
+  if (RegOpenKeyExA(root, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS)
+    return 0;
+  DWORD size = (DWORD)maxlen;
+  DWORD type;
+  LONG res = RegQueryValueExA(key, value, NULL, &type, (BYTE *)out, &size);
+  RegCloseKey(key);
+  if (res != ERROR_SUCCESS || (type != REG_SZ && type != REG_EXPAND_SZ))
+    return 0;
+  out[size < (DWORD)maxlen ? size : maxlen - 1] = '\0';
+  return 1;
+}
+
+static int reg_read_dword(HKEY root, const char *subkey, const char *value,
+                          DWORD *out) {
+  HKEY key;
+  if (RegOpenKeyExA(root, subkey, 0, KEY_READ, &key) != ERROR_SUCCESS)
+    return 0;
+  DWORD size = sizeof(DWORD);
+  DWORD type;
+  LONG res = RegQueryValueExA(key, value, NULL, &type, (BYTE *)out, &size);
+  RegCloseKey(key);
+  return res == ERROR_SUCCESS && type == REG_DWORD;
+}
+
+// Walks the process tree from the current process up to `max_depth`
+// ancestors, writing each ancestor's exe basename (no ".exe") into `out`.
+// Returns the depth at which it stopped (0 = current process' parent).
+static int win_walk_parents(char out[][64], int max_depth) {
+  HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+  if (snap == INVALID_HANDLE_VALUE)
+    return 0;
+  PROCESSENTRY32 pe;
+  pe.dwSize = sizeof(pe);
+  int found = 0;
+  DWORD pid = GetCurrentProcessId();
+  for (int depth = 0; depth < max_depth; depth++) {
+    DWORD ppid = 0;
+    char exe[MAX_PATH] = "";
+    if (!Process32First(snap, &pe))
+      break;
+    do {
+      if (pe.th32ProcessID == pid) {
+        ppid = pe.th32ParentProcessID;
+        strncpy(exe, pe.szExeFile, sizeof(exe) - 1);
+        break;
+      }
+    } while (Process32Next(snap, &pe));
+    if (!ppid)
+      break;
+    pid = ppid;
+    if (!Process32First(snap, &pe))
+      break;
+    exe[0] = '\0';
+    do {
+      if (pe.th32ProcessID == pid) {
+        strncpy(exe, pe.szExeFile, sizeof(exe) - 1);
+        break;
+      }
+    } while (Process32Next(snap, &pe));
+    if (!exe[0])
+      break;
+    char *dot = strstr(exe, ".exe");
+    if (dot)
+      *dot = '\0';
+    strncpy(out[found], exe, 63);
+    out[found][63] = '\0';
+    found++;
+  }
+  CloseHandle(snap);
+  return found;
 }
 #endif
 
@@ -470,7 +585,7 @@ static int is_cursor_escape(const char *p) {
 static int load_logo_ff_colored(const char *name) {
   char cmd[256];
   snprintf(cmd, sizeof(cmd),
-           "fastfetch -l %s -s break --pipe false 2>/dev/null", name);
+           "fastfetch -l %s -s break --pipe false 2>" NULL_DEVICE, name);
   FILE *fp = popen(cmd, "r");
   if (!fp)
     return 0;
@@ -524,7 +639,7 @@ static int load_logo_ff_colored(const char *name) {
 
 // Fallback: load from --print-logos (no colors, but works on older fastfetch)
 static int load_logo_ff_plain(const char *name) {
-  FILE *fp = popen("fastfetch --print-logos 2>/dev/null", "r");
+  FILE *fp = popen("fastfetch --print-logos 2>" NULL_DEVICE, "r");
   if (!fp)
     return 0;
 
@@ -612,7 +727,7 @@ static int parse_os_release_val(const char *buf, int prefix_len, char *out,
 static char distro_id_like[64] = "";
 
 static int detect_distro_fastfetch(char *out, int maxlen) {
-  FILE *fp = popen("fastfetch --json 2>/dev/null", "r");
+  FILE *fp = popen("fastfetch --json 2>" NULL_DEVICE, "r");
   if (!fp)
     return 0;
   char buf[1024];
@@ -694,6 +809,12 @@ static int detect_distro(char *out, int maxlen) {
     pclose(fp);
   }
   strncpy(out, "macos", maxlen-1);
+  return 1;
+#elif defined(_WIN32)
+  if (detect_distro_fastfetch(out, maxlen))
+    return 1;
+  strncpy(out, "windows", maxlen - 1);
+  out[maxlen - 1] = '\0';
   return 1;
 #else
   if (detect_distro_fastfetch(out, maxlen))
@@ -1032,6 +1153,14 @@ static void add_info(const char *label, const char *fmt, ...) {
 static void gather_title(void) {
   char user[64] = "";
   char host[64] = "";
+#ifdef _WIN32
+  DWORD user_len = sizeof(user);
+  if (!GetUserNameA(user, &user_len)) {
+    char *env = getenv("USERNAME");
+    if (env)
+      strncpy(user, env, sizeof(user) - 1);
+  }
+#else
   char *login = getlogin();
   if (login)
     strncpy(user, login, sizeof(user) - 1);
@@ -1040,6 +1169,7 @@ static void gather_title(void) {
     if (env)
       strncpy(user, env, sizeof(user) - 1);
   }
+#endif
   gethostname(host, sizeof(host));
 
   char line[MAX_LINE_LEN];
@@ -1074,6 +1204,32 @@ static void gather_os(void) {
     uname(&u);
     add_info("OS", "%s %s", u.sysname, u.machine);
   }
+#elif defined(_WIN32)
+  char product[128] = "", display_ver[32] = "", build[32] = "";
+  const char *ver_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+  reg_read_str(HKEY_LOCAL_MACHINE, ver_key, "ProductName", product,
+              sizeof(product));
+  if (!reg_read_str(HKEY_LOCAL_MACHINE, ver_key, "DisplayVersion", display_ver,
+                    sizeof(display_ver)))
+    reg_read_str(HKEY_LOCAL_MACHINE, ver_key, "ReleaseId", display_ver,
+                sizeof(display_ver));
+  reg_read_str(HKEY_LOCAL_MACHINE, ver_key, "CurrentBuildNumber", build,
+              sizeof(build));
+  SYSTEM_INFO si;
+  GetNativeSystemInfo(&si);
+  const char *arch = si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_AMD64
+                          ? "x86_64"
+                          : si.wProcessorArchitecture == PROCESSOR_ARCHITECTURE_ARM64
+                                ? "aarch64"
+                                : "x86";
+  if (!product[0])
+    strcpy(product, "Windows");
+  if (display_ver[0] && build[0])
+    add_info("OS", "%s %s (Build %s) %s", product, display_ver, build, arch);
+  else if (build[0])
+    add_info("OS", "%s (Build %s) %s", product, build, arch);
+  else
+    add_info("OS", "%s %s", product, arch);
 #else
   char pretty[128] = "";
   FILE *fp = fopen("/etc/os-release", "r");
@@ -1111,6 +1267,17 @@ static void gather_host(void) {
   char model[128] = "";
   if (sysctl_str("hw.model", model, sizeof(model)))
     add_info("Host", "%s", model);
+#elif defined(_WIN32)
+  char manufacturer[64] = "", product[64] = "";
+  const char *bios_key = "HARDWARE\\DESCRIPTION\\System\\BIOS";
+  reg_read_str(HKEY_LOCAL_MACHINE, bios_key, "SystemManufacturer", manufacturer,
+              sizeof(manufacturer));
+  reg_read_str(HKEY_LOCAL_MACHINE, bios_key, "SystemProductName", product,
+              sizeof(product));
+  if (manufacturer[0] && product[0])
+    add_info("Host", "%s %s", manufacturer, product);
+  else if (product[0])
+    add_info("Host", "%s", product);
 #else
   char model[128] = "";
   // Try device-tree first (ARM/Apple Silicon), then DMI (x86)
@@ -1133,9 +1300,25 @@ static void gather_host(void) {
 }
 
 static void gather_kernel(void) {
+#ifdef _WIN32
+  char build[32] = "";
+  DWORD major = 0, minor = 0;
+  const char *ver_key = "SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion";
+  reg_read_dword(HKEY_LOCAL_MACHINE, ver_key, "CurrentMajorVersionNumber",
+                &major);
+  reg_read_dword(HKEY_LOCAL_MACHINE, ver_key, "CurrentMinorVersionNumber",
+                &minor);
+  reg_read_str(HKEY_LOCAL_MACHINE, ver_key, "CurrentBuildNumber", build,
+              sizeof(build));
+  if (major && build[0])
+    add_info("Kernel", "Windows NT %lu.%lu.%s", major, minor, build);
+  else if (build[0])
+    add_info("Kernel", "Windows NT (Build %s)", build);
+#else
   struct utsname u;
   uname(&u);
   add_info("Kernel", "%s %s", u.sysname, u.release);
+#endif
 }
 
 static void gather_uptime(void) {
@@ -1145,6 +1328,8 @@ static void gather_uptime(void) {
   if (sysctlbyname("kern.boottime", &bt, &len, NULL, 0) != 0)
     return;
   double secs = difftime(time(NULL), bt.tv_sec);
+#elif defined(_WIN32)
+  double secs = GetTickCount64() / 1000.0;
 #else
   FILE *fp = fopen("/proc/uptime", "r");
   if (!fp)
@@ -1244,6 +1429,22 @@ static void gather_packages(void) {
   }
   if (total > 0)
     snprintf(val, sizeof(val), "%d (brew)", total);
+#elif defined(_WIN32)
+  // scoop
+  char scoop_path[MAX_PATH] = "";
+  char *userprofile = getenv("USERPROFILE");
+  if (userprofile) {
+    snprintf(scoop_path, sizeof(scoop_path), "%s\\scoop\\apps", userprofile);
+    n = count_subdirs(scoop_path);
+    if (n > 0)
+      snprintf(val, sizeof(val), "%d (scoop)", n);
+  }
+  // chocolatey
+  if (!val[0]) {
+    n = count_subdirs("C:\\ProgramData\\chocolatey\\lib");
+    if (n > 0)
+      snprintf(val, sizeof(val), "%d (choco)", n);
+  }
 #else
   // emerge (Gentoo)
   n = count_emerge_pkgs();
@@ -1288,6 +1489,7 @@ static void gather_packages(void) {
   }
 #endif
 
+#ifndef _WIN32
   n = 0;
   FILE *flatpak_fp = popen("flatpak list --columns=ref 2>/dev/null", "r");
   if (flatpak_fp) {
@@ -1304,11 +1506,53 @@ static void gather_packages(void) {
     else
       snprintf(val, sizeof(val), "%s", flatpak_val);
   }
+#endif
 
   if (val[0])
     add_info("Packages", "%s", val);
 }
 
+#ifdef _WIN32
+static void gather_shell(void) {
+  char parents[8][64];
+  int depth = win_walk_parents(parents, 8);
+  const char *known[] = {"cmd", "powershell", "pwsh", "nu", "bash",
+                         "zsh", "fish", NULL};
+  const char *name = NULL;
+  for (int i = 0; i < depth && !name; i++) {
+    for (int k = 0; known[k]; k++) {
+      if (strcasecmp(parents[i], known[k]) == 0) {
+        name = known[k];
+        break;
+      }
+    }
+  }
+  if (!name)
+    return;
+
+  char version[64] = "";
+  if (strcasecmp(name, "powershell") == 0 || strcasecmp(name, "pwsh") == 0) {
+    char cmd[128];
+    snprintf(cmd, sizeof(cmd),
+             "%s -NoProfile -Command \"$PSVersionTable.PSVersion.ToString()\"",
+             name);
+    FILE *fp = popen(cmd, "r");
+    if (fp) {
+      if (fgets(version, sizeof(version), fp)) {
+        int len = strlen(version);
+        while (len > 0 && (version[len - 1] == '\n' || version[len - 1] == '\r'))
+          version[--len] = '\0';
+      }
+      pclose(fp);
+    }
+  }
+
+  if (version[0])
+    add_info("Shell", "%s %s", name, version);
+  else
+    add_info("Shell", "%s", name);
+}
+#else
 static void gather_shell(void) {
   char *shell = NULL;
   char shell_buf[64] = "";
@@ -1404,6 +1648,7 @@ static void gather_shell(void) {
   else
     add_info("Shell", "%s", name);
 }
+#endif
 
 static void gather_display(void) {
 #ifdef __APPLE__
@@ -1445,6 +1690,18 @@ static void gather_display(void) {
     add_info("Display", "%s %s", name, res);
   else if (res[0])
     add_info("Display", "%s", res);
+#elif defined(_WIN32)
+  DISPLAY_DEVICEA dd;
+  dd.cb = sizeof(dd);
+  for (DWORD i = 0; EnumDisplayDevicesA(NULL, i, &dd, 0); i++) {
+    if (!(dd.StateFlags & DISPLAY_DEVICE_ATTACHED_TO_DESKTOP))
+      continue;
+    DEVMODEA dm;
+    dm.dmSize = sizeof(dm);
+    if (EnumDisplaySettingsA(dd.DeviceName, ENUM_CURRENT_SETTINGS, &dm))
+      add_info("Display", "%ux%u @ %luHz", dm.dmPelsWidth, dm.dmPelsHeight,
+               dm.dmDisplayFrequency);
+  }
 #else
   DIR *d = opendir("/sys/class/drm");
   if (!d)
@@ -1525,6 +1782,8 @@ static void gather_display(void) {
 static void gather_wm(void) {
 #ifdef __APPLE__
   add_info("WM", "Aqua");
+#elif defined(_WIN32)
+  add_info("WM", "DWM");
 #else
   // Check WAYLAND_DISPLAY or XDG_SESSION_TYPE to determine session type
   char *wayland = getenv("WAYLAND_DISPLAY");
@@ -1625,6 +1884,32 @@ static void gather_cpu(void) {
       add_info("CPU", "%s", name);
     }
   }
+#elif defined(_WIN32)
+  char name[128] = "";
+  DWORD mhz = 0;
+  const char *cpu_key = "HARDWARE\\DESCRIPTION\\System\\CentralProcessor\\0";
+  reg_read_str(HKEY_LOCAL_MACHINE, cpu_key, "ProcessorNameString", name,
+              sizeof(name));
+  reg_read_dword(HKEY_LOCAL_MACHINE, cpu_key, "~MHz", &mhz);
+  SYSTEM_INFO si;
+  GetSystemInfo(&si);
+  int cores = (int)si.dwNumberOfProcessors;
+  // Trim leading/trailing spaces the registry value often has
+  char *start = name;
+  while (*start == ' ')
+    start++;
+  int len = strlen(start);
+  while (len > 0 && start[len - 1] == ' ')
+    len--;
+  start[len] = '\0';
+  if (start[0]) {
+    if (cores > 0 && mhz > 0)
+      add_info("CPU", "%s (%d) @ %.2f GHz", start, cores, mhz / 1000.0f);
+    else if (cores > 0)
+      add_info("CPU", "%s (%d)", start, cores);
+    else
+      add_info("CPU", "%s", start);
+  }
 #else
   char name[128] = "";
   int cores = 0;
@@ -1723,7 +2008,7 @@ static void gather_cpu(void) {
 // Example input: "01:00.0 VGA compatible controller: NVIDIA Corporation
 // AD106M [GeForce RTX 4070 Max-Q / Mobile] (rev a1)"
 // We prefer the bracket content; otherwise the chunk after "Corporation ".
-#ifndef __APPLE__
+#if !defined(__APPLE__) && !defined(_WIN32)
 static int gpu_lookup_lspci(const char *pci_id, char *out, int outlen) {
   if (!pci_id || !pci_id[0])
     return 0;
@@ -1804,6 +2089,33 @@ static void gather_gpu(void) {
   pclose(fp);
   if (gpu[0])
     add_info("GPU", "%s", gpu);
+#elif defined(_WIN32)
+  // Enumerate all installed adapters, not just ones currently driving a
+  // monitor — hybrid-graphics laptops (Optimus etc.) often leave the
+  // discrete GPU unattached until something requests it.
+  DISPLAY_DEVICEA dd;
+  dd.cb = sizeof(dd);
+  char seen[8][128];
+  int seen_count = 0;
+  for (DWORD i = 0; EnumDisplayDevicesA(NULL, i, &dd, 0); i++) {
+    if (dd.StateFlags & DISPLAY_DEVICE_MIRRORING_DRIVER)
+      continue;
+    int dup = 0;
+    for (int k = 0; k < seen_count; k++) {
+      if (strcmp(seen[k], dd.DeviceString) == 0) {
+        dup = 1;
+        break;
+      }
+    }
+    if (dup)
+      continue;
+    add_info("GPU", "%s", dd.DeviceString);
+    if (seen_count < 8) {
+      strncpy(seen[seen_count], dd.DeviceString, sizeof(seen[seen_count]) - 1);
+      seen[seen_count][sizeof(seen[seen_count]) - 1] = '\0';
+      seen_count++;
+    }
+  }
 #else
   DIR *d = opendir("/sys/class/drm");
   if (!d)
@@ -1942,6 +2254,17 @@ static void gather_memory(void) {
   const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
   add_info("Memory", "%.2f GiB / %.2f GiB (\033[%sm%d%%\033[0m)", used_gib,
            total_gib, color, pct);
+#elif defined(_WIN32)
+  MEMORYSTATUSEX ms;
+  ms.dwLength = sizeof(ms);
+  if (!GlobalMemoryStatusEx(&ms))
+    return;
+  float used_gib = (ms.ullTotalPhys - ms.ullAvailPhys) / 1073741824.0f;
+  float total_gib = ms.ullTotalPhys / 1073741824.0f;
+  int pct = ms.dwMemoryLoad;
+  const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
+  add_info("Memory", "%.2f GiB / %.2f GiB (\033[%sm%d%%\033[0m)", used_gib,
+           total_gib, color, pct);
 #else
   long long total = 0, avail = 0;
   FILE *fp = fopen("/proc/meminfo", "r");
@@ -1982,6 +2305,29 @@ static void gather_swap(void) {
   const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
   add_info("Swap", "%.2f MiB / %.2f MiB (\033[%sm%d%%\033[0m)",
            used_mb, total_mb, color, pct);
+#elif defined(_WIN32)
+  MEMORYSTATUSEX ms;
+  ms.dwLength = sizeof(ms);
+  if (!GlobalMemoryStatusEx(&ms))
+    return;
+  // Windows reports the page file (RAM + swap combined), not swap alone —
+  // approximate swap as page file minus physical RAM.
+  if (ms.ullTotalPageFile <= ms.ullTotalPhys)
+    return;
+  long long total = (long long)((ms.ullTotalPageFile - ms.ullTotalPhys) / 1024);
+  long long used =
+      (long long)((ms.ullTotalPageFile - ms.ullAvailPageFile) / 1024) -
+      (long long)((ms.ullTotalPhys - ms.ullAvailPhys) / 1024);
+  if (used < 0)
+    used = 0;
+  int pct = total > 0 ? (int)(used * 100 / total) : 0;
+  const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
+  if (total >= 1048576)
+    add_info("Swap", "%.2f GiB / %.2f GiB (\033[%sm%d%%\033[0m)",
+             used / 1048576.0f, total / 1048576.0f, color, pct);
+  else
+    add_info("Swap", "%.2f MiB / %.2f MiB (\033[%sm%d%%\033[0m)",
+             used / 1024.0f, total / 1024.0f, color, pct);
 #else
   long long total = 0, free_s = 0;
   FILE *fp = fopen("/proc/meminfo", "r");
@@ -2011,6 +2357,39 @@ static void gather_swap(void) {
 #endif
 }
 
+#ifdef _WIN32
+static void gather_disk(void) {
+  char sysdir[MAX_PATH];
+  if (!GetWindowsDirectoryA(sysdir, sizeof(sysdir)))
+    return;
+  char root[4] = {sysdir[0], ':', '\\', '\0'};
+
+  ULARGE_INTEGER free_avail, total, free_total;
+  if (!GetDiskFreeSpaceExA(root, &free_avail, &total, &free_total))
+    return;
+
+  float total_gib = (float)total.QuadPart / 1073741824.0f;
+  float free_gib = (float)free_total.QuadPart / 1073741824.0f;
+  float used_gib = total_gib - free_gib;
+  int pct = total_gib > 0 ? (int)(used_gib * 100 / total_gib) : 0;
+  const char *color = pct >= 80 ? "31" : pct >= 50 ? "93" : "32";
+
+  char fs_name[32] = "";
+  char label[64] = "";
+  DWORD serial, max_comp, flags;
+  GetVolumeInformationA(root, label, sizeof(label), &serial, &max_comp, &flags,
+                        fs_name, sizeof(fs_name));
+
+  char lbl[16];
+  snprintf(lbl, sizeof(lbl), "Disk (%c:)", root[0]);
+  if (fs_name[0])
+    add_info(lbl, "%.2f GiB / %.2f GiB (\033[%sm%d%%\033[0m) - %s", used_gib,
+             total_gib, color, pct, fs_name);
+  else
+    add_info(lbl, "%.2f GiB / %.2f GiB (\033[%sm%d%%\033[0m)", used_gib,
+             total_gib, color, pct);
+}
+#else
 static void gather_disk(void) {
   struct statvfs st;
   if (statvfs("/", &st) != 0)
@@ -2065,6 +2444,7 @@ static void gather_disk(void) {
              total_gib, color, pct);
 #endif
 }
+#endif
 
 static void gather_battery(void) {
 #ifdef __APPLE__
@@ -2114,6 +2494,30 @@ static void gather_battery(void) {
     add_info("Battery", "\033[%sm%d%%\033[0m [%s]", color, capacity, status);
   else
     add_info("Battery", "\033[%sm%d%%\033[0m", color, capacity);
+#elif defined(_WIN32)
+  SYSTEM_POWER_STATUS sps;
+  if (!GetSystemPowerStatus(&sps) || sps.BatteryLifePercent == 255)
+    return;
+
+  int capacity = sps.BatteryLifePercent;
+  const char *status = sps.ACLineStatus == 1 ? "Charging" : "Discharging";
+  char time_str[64] = "";
+  if (sps.ACLineStatus != 1 && sps.BatteryLifeTime != (DWORD)-1) {
+    int h = sps.BatteryLifeTime / 3600, m = (sps.BatteryLifeTime % 3600) / 60;
+    if (h > 0)
+      snprintf(time_str, sizeof(time_str), "%d hour%s, %d min%s remaining", h,
+               h == 1 ? "" : "s", m, m == 1 ? "" : "s");
+    else
+      snprintf(time_str, sizeof(time_str), "%d min%s remaining", m,
+               m == 1 ? "" : "s");
+  }
+
+  const char *color = capacity >= 50 ? "32" : capacity >= 20 ? "93" : "31";
+  if (time_str[0])
+    add_info("Battery", "\033[%sm%d%%\033[0m (%s) [%s]", color, capacity,
+             time_str, status);
+  else
+    add_info("Battery", "\033[%sm%d%%\033[0m [%s]", color, capacity, status);
 #else
   // Find first battery in /sys/class/power_supply
   char bat_name[64] = "";
@@ -2267,8 +2671,29 @@ static void gather_terminal(void) {
     strcpy(term, "ghostty");
   } else if (getenv("TERMINAL_EMULATOR")) {
     strncpy(term, getenv("TERMINAL_EMULATOR"), sizeof(term) - 1);
+  } else if (getenv("WT_SESSION")) {
+    strcpy(term, "WindowsTerminal");
   } else {
-#ifdef __APPLE__
+#if defined(_WIN32)
+    // Walk up the process tree, skipping known shells
+    char parents[4][64];
+    int depth = win_walk_parents(parents, 4);
+    const char *shells[] = {"cmd",   "powershell", "pwsh",  "nu",
+                            "bash",  "zsh",        "fish",  "sh", NULL};
+    for (int i = 0; i < depth; i++) {
+      int is_shell = 0;
+      for (int k = 0; shells[k]; k++) {
+        if (strcasecmp(parents[i], shells[k]) == 0) {
+          is_shell = 1;
+          break;
+        }
+      }
+      if (!is_shell) {
+        strncpy(term, parents[i], sizeof(term) - 1);
+        break;
+      }
+    }
+#elif defined(__APPLE__)
     // Walk up the process tree using sysctl
     pid_t pid = getpid();
     for (int depth = 0; depth < 4; depth++) {
@@ -2338,6 +2763,41 @@ static void gather_terminal(void) {
     add_info("Terminal", "%s", term);
 }
 
+#ifdef _WIN32
+static void gather_ip(void) {
+  ULONG size = 0;
+  GetAdaptersAddresses(AF_INET, GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                       NULL, NULL, &size);
+  IP_ADAPTER_ADDRESSES *addrs = malloc(size);
+  if (!addrs)
+    return;
+  if (GetAdaptersAddresses(AF_INET,
+                           GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST,
+                           NULL, addrs, &size) != NO_ERROR) {
+    free(addrs);
+    return;
+  }
+  for (IP_ADAPTER_ADDRESSES *a = addrs; a; a = a->Next) {
+    if (a->OperStatus != IfOperStatusUp || a->IfType == IF_TYPE_SOFTWARE_LOOPBACK)
+      continue;
+    IP_ADAPTER_UNICAST_ADDRESS *ua = a->FirstUnicastAddress;
+    if (!ua)
+      continue;
+    struct sockaddr_in *sa = (struct sockaddr_in *)ua->Address.lpSockaddr;
+    char addr[16];
+    if (!inet_ntop(AF_INET, &sa->sin_addr, addr, sizeof(addr)))
+      continue;
+    char name[64] = "";
+    WideCharToMultiByte(CP_UTF8, 0, a->FriendlyName, -1, name, sizeof(name),
+                        NULL, NULL);
+    char lbl[80];
+    snprintf(lbl, sizeof(lbl), "Local IP (%s)", name[0] ? name : "adapter");
+    add_info(lbl, "%s/%u", addr, ua->OnLinkPrefixLength);
+    break;
+  }
+  free(addrs);
+}
+#else
 static void gather_ip(void) {
   struct ifaddrs *ifa_list, *ifa;
   if (getifaddrs(&ifa_list) != 0)
@@ -2378,13 +2838,25 @@ static void gather_ip(void) {
   }
   freeifaddrs(ifa_list);
 }
+#endif
 
 static void gather_locale(void) {
+#ifdef _WIN32
+  wchar_t wlocale[LOCALE_NAME_MAX_LENGTH];
+  if (GetUserDefaultLocaleName(wlocale, LOCALE_NAME_MAX_LENGTH)) {
+    char locale[LOCALE_NAME_MAX_LENGTH];
+    WideCharToMultiByte(CP_UTF8, 0, wlocale, -1, locale, sizeof(locale), NULL,
+                        NULL);
+    add_info("Locale", "%s", locale);
+  }
+#else
   char *lang = getenv("LANG");
   if (lang && lang[0])
     add_info("Locale", "%s", lang);
+#endif
 }
 
+#ifndef _WIN32
 static void read_gtk_setting(const char *key, char *out, int maxlen) {
   char path[512];
   const char *home = getenv("HOME");
@@ -2410,6 +2882,7 @@ static void read_gtk_setting(const char *key, char *out, int maxlen) {
   }
   fclose(fp);
 }
+#endif
 
 static void gather_theme(void) {
 #ifdef __APPLE__
@@ -2426,6 +2899,12 @@ static void gather_theme(void) {
     add_info("Theme", "%s", style);
   else
     add_info("Theme", "Light");
+#elif defined(_WIN32)
+  DWORD light = 1;
+  reg_read_dword(HKEY_CURRENT_USER,
+                "SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize",
+                "AppsUseLightTheme", &light);
+  add_info("Theme", "%s", light ? "Light" : "Dark");
 #else
   char theme[64] = "";
   read_gtk_setting("gtk-theme-name", theme, sizeof(theme));
@@ -2436,6 +2915,8 @@ static void gather_theme(void) {
 
 static void gather_icons(void) {
 #ifdef __APPLE__
+  add_info("Icons", "System");
+#elif defined(_WIN32)
   add_info("Icons", "System");
 #else
   char icons[64] = "";
@@ -2458,6 +2939,11 @@ static void gather_font(void) {
   }
   if (font[0])
     add_info("Font", "%s", font);
+#elif defined(_WIN32)
+  LOGFONTA lf;
+  HFONT hf = (HFONT)GetStockObject(DEFAULT_GUI_FONT);
+  if (hf && GetObjectA(hf, sizeof(lf), &lf) && lf.lfFaceName[0])
+    add_info("Font", "%s", lf.lfFaceName);
 #else
   char font[128] = "";
   read_gtk_setting("gtk-font-name", font, sizeof(font));
@@ -2812,10 +3298,17 @@ static void set_distro_colors(const char *distro) {
   } else if (strcasecmp(distro, "macos") == 0) {
     color_outer = "\033[1;36m";
     color_inner = "\033[1;37m";
+  } else if (strcasecmp(distro, "windows") == 0) {
+    color_outer = "\033[1;34m";
+    color_inner = "\033[1;37m";
   }
 }
 
 int main(int argc, char **argv) {
+#ifdef _WIN32
+  WSADATA wsadata;
+  WSAStartup(MAKEWORD(2, 2), &wsadata);
+#endif
   char distro[64] = "";
   const char *logo_name = NULL;
   int rotate_x = 1, rotate_y = 1;
@@ -3048,11 +3541,14 @@ int main(int argc, char **argv) {
 
   signal(SIGINT, handle_signal);
   signal(SIGTERM, handle_signal);
+#ifndef _WIN32
   signal(SIGWINCH, handle_winch);
+#endif
   atexit(cleanup);
 
   int fetch_start = show_info ? 1 : 0;
 
+#ifndef _WIN32
   if (tcgetattr(STDIN_FILENO, &orig_termios) == 0) {
     termios_saved = 1;
     struct termios raw = orig_termios;
@@ -3061,14 +3557,56 @@ int main(int argc, char **argv) {
     raw.c_cc[VTIME] = 0;
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
   }
+#else
+  HANDLE win_hstdin = GetStdHandle(STD_INPUT_HANDLE);
+  if (GetConsoleMode(win_hstdin, &orig_console_mode)) {
+    termios_saved = 1;
+    SetConsoleMode(win_hstdin, orig_console_mode &
+                                    ~(ENABLE_LINE_INPUT | ENABLE_ECHO_INPUT));
+  }
+  HANDLE win_hstdout = GetStdHandle(STD_OUTPUT_HANDLE);
+  DWORD win_stdout_mode;
+  if (GetConsoleMode(win_hstdout, &win_stdout_mode))
+    SetConsoleMode(win_hstdout,
+                   win_stdout_mode | ENABLE_VIRTUAL_TERMINAL_PROCESSING);
+#endif
 
   printf("\033[?25l\033[2J");
   fflush(stdout);
 
+#ifdef _WIN32
+  int win_last_rows = 0, win_last_cols = 0;
+  get_term_size(&win_last_rows, &win_last_cols);
+  // Debounce state: conpty (Windows Terminal) resizes its buffer
+  // asynchronously in response to our own output, so a size read can be
+  // transiently wrong for a single frame right after we print. Only commit
+  // a resize once the same new size is seen on two consecutive polls.
+  int win_pending_rows = win_last_rows, win_pending_cols = win_last_cols;
+#endif
+
   for (int frame = 0; max_frames == 0 || frame < max_frames; frame++) {
+#ifndef _WIN32
     struct pollfd pfd = {.fd = STDIN_FILENO, .events = POLLIN};
     if (poll(&pfd, 1, 0) > 0)
       break;
+#else
+    if (_kbhit())
+      break;
+    {
+      int cur_rows, cur_cols;
+      get_term_size(&cur_rows, &cur_cols);
+      if (cur_rows == win_pending_rows && cur_cols == win_pending_cols) {
+        if (cur_rows != win_last_rows || cur_cols != win_last_cols) {
+          win_last_rows = cur_rows;
+          win_last_cols = cur_cols;
+          term_resized = 1;
+        }
+      } else {
+        win_pending_rows = cur_rows;
+        win_pending_cols = cur_cols;
+      }
+    }
+#endif
     // Handle terminal resize: recompute the same layout as startup
     if (term_resized) {
       term_resized = 0;
@@ -3260,21 +3798,44 @@ int main(int argc, char **argv) {
       // Erase to end of line + newline
       if (p + 8 >= end) break;
       memcpy(p, clr_seq, 4); p += 4;
+#ifdef _WIN32
+      *p++ = '\r';
+#endif
       *p++ = '\n';
     }
     if (layout_stacked && stacked_info_rows > 0) {
       if (render_height > 0 && p + 8 < end) {
         memcpy(p, clr_seq, 4); p += 4;
+#ifdef _WIN32
+        *p++ = '\r';
+#endif
         *p++ = '\n';
       }
       for (int i = 0; i < stacked_info_rows && p + 16 < end; i++) {
         p = emit_clipped(p, end, fetch_lines[i], info_clip_cols);
         memcpy(p, clr_seq, 4); p += 4;
+#ifdef _WIN32
+        *p++ = '\r';
+#endif
         *p++ = '\n';
       }
     }
-    if (write(STDOUT_FILENO, out_buf, p - out_buf) < 0)
-      break;
+    {
+      const char *wp = out_buf;
+      int remaining = (int)(p - out_buf);
+      int write_failed = 0;
+      while (remaining > 0) {
+        int n = write(STDOUT_FILENO, wp, remaining);
+        if (n < 0) {
+          write_failed = 1;
+          break;
+        }
+        wp += n;
+        remaining -= n;
+      }
+      if (write_failed)
+        break;
+    }
     usleep(50000);
   }
 
