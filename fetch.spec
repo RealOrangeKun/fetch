@@ -1,6 +1,6 @@
 Name:           fetch
 Version:        2.2.1
-Release:        1.%(date +%%Y%%m%%d%%H%%M)%{?dist}
+Release:        1.%(date +%%Y%%m%%d)%{?dist}
 Summary:        Animated 3D fetch tool for your terminal
 
 License:        ISC
