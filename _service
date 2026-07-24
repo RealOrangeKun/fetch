@@ -3,6 +3,6 @@
     <param name="host">github.com</param>
     <param name="protocol">https</param>
     <param name="path">/RealOrangeKun/fetch/archive/refs/heads/main.tar.gz</param>
-    <param name="filename">fetch-2.2.0.tar.gz</param>
+    <param name="filename">fetch-2.2.1.tar.gz</param>
   </service>
 </services>
