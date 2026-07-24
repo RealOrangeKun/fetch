@@ -29,6 +29,9 @@ sudo make install
 
 `PREFIX=~/.local make install` if you don't want it system-wide.
 
+<details>
+<summary><h2>Package managers</h2></summary>
+
 ### Arch Linux (AUR)
 You can install `fetch-git` from the AUR using your favorite AUR helper:
 
@@ -127,6 +130,8 @@ emerge -a app-misc/fetch
 
 As for all GURU packages, you will have to add the package in your `package.accept\_keywords` directory if `~arch` is not already set.
 
+</details>
+
 ## Logos
 
 By default it auto-detects your distro and grabs the logo from fastfetch
@@ -156,22 +161,22 @@ Without fastfetch, the built-in Gentoo logo is used.
 
 All system info is gathered natively — no fastfetch or neofetch needed:
 
-- **OS** — `/etc/os-release`
-- **Host** — `/proc/device-tree/model` or `/sys/class/dmi/id/product_name`
-- **Kernel** — `uname()`
-- **Uptime** — `/proc/uptime`
-- **Packages** — emerge, pacman, dpkg, rpm, xbps, apk
-- **Shell** — parent process detection (not just `$SHELL`)
-- **Display** — per-connector DRM enumeration (multi-monitor)
-- **WM** — process scanning + DE-to-WM mapping
-- **Theme/Icons/Font** — `~/.config/gtk-3.0/settings.ini` (Linux), `defaults read` (macOS)
-- **CPU** — `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
-- **GPU** — DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
-- **Memory/Swap** — `/proc/meminfo` (Linux), `vm_stat` (macOS)
-- **Disk** — `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS)
-- **Battery** — `energy_now/energy_full` (Linux), IOKit (macOS)
-- **Packages** — emerge, pacman, dpkg, rpm/dnf, xbps, apk, flatpak, brew
-- **Local IP** — `getifaddrs()`
+- **OS** - `/etc/os-release`
+- **Host** - `/proc/device-tree/model` or `/sys/class/dmi/id/product_name`
+- **Kernel** - `uname()`
+- **Uptime** - `/proc/uptime`
+- **Packages** - emerge, pacman, dpkg, rpm, xbps, apk
+- **Shell** - parent process detection (not just `$SHELL`)
+- **Display** - per-connector DRM enumeration (multi-monitor)
+- **WM** - process scanning + DE-to-WM mapping
+- **Theme/Icons/Font** - `~/.config/gtk-3.0/settings.ini` (Linux), `defaults read` (macOS)
+- **CPU** - `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
+- **GPU** - DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
+- **Memory/Swap** - `/proc/meminfo` (Linux), `vm_stat` (macOS)
+- **Disk** - `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS)
+- **Battery** - `energy_now/energy_full` (Linux), IOKit (macOS)
+- **Packages** - emerge, pacman, dpkg, rpm/dnf, xbps, apk, flatpak, brew
+- **Local IP** - `getifaddrs()`
 
 Stats like memory, battery, and uptime update in real-time while the logo spins.
 
@@ -253,8 +258,8 @@ If you want to chat about ideas before writing code, reach out on
 
 ## How it works
 
-Each character in the logo gets a weight based on its visual density — `M` is
-heavy, `.` is light, `█` is full, `░` is thin. That weight becomes a height,
+Each character in the logo gets a weight based on its visual density (`M` is
+heavy, `.` is light, `█` is full, `░` is thin), and that weight becomes a height,
 turning the flat logo into a 3D relief. Surface normals come from the height
 gradient, and everything gets rotated + projected + shaded every frame with a
 z-buffer. Single file C, no deps beyond libm.
