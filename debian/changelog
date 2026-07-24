@@ -1,3 +1,9 @@
+fetch (2.2.1) noble; urgency=medium
+
+  * Update to 2.2.1.
+
+ -- Youssef Tarek <amazingritro66@gmail.com>  Fri, 24 Jul 2026 21:44:30 +0300
+
 fetch (2.2.0.1) noble; urgency=medium
 
   * Fix Homepage field in debian/control to point at the upstream repo.
