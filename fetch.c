@@ -276,9 +276,8 @@ static int reg_read_dword(HKEY root, const char *subkey, const char *value,
   return res == ERROR_SUCCESS && type == REG_DWORD;
 }
 
-// Walks the process tree from the current process up to `max_depth`
-// ancestors, writing each ancestor's exe basename (no ".exe") into `out`.
-// Returns the depth at which it stopped (0 = current process' parent).
+// Walks up to max_depth ancestors, writing each exe basename into out.
+// Returns how many were found.
 static int win_walk_parents(char out[][64], int max_depth) {
   HANDLE snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
   if (snap == INVALID_HANDLE_VALUE)
@@ -538,9 +537,19 @@ static float char_weight_utf8(const char *ch) {
 
 static char file_distro[64] = "";
 
+// cmd.exe/PowerShell don't set HOME, only Git Bash/MSYS/WSL do.
+static const char *get_home_dir(void) {
+  const char *home = getenv("HOME");
+#ifdef _WIN32
+  if (!home)
+    home = getenv("USERPROFILE");
+#endif
+  return home;
+}
+
 static int load_logo_file(void) {
   char path[512];
-  const char *home = getenv("HOME");
+  const char *home = get_home_dir();
   if (!home)
     return 0;
   snprintf(path, sizeof(path), "%s/.config/fetch/logo.txt", home);
@@ -585,7 +594,7 @@ static int is_cursor_escape(const char *p) {
 static int load_logo_ff_colored(const char *name) {
   char cmd[256];
   snprintf(cmd, sizeof(cmd),
-           "fastfetch -l %s -s break --pipe false 2>" NULL_DEVICE, name);
+           "fastfetch -l \"%s\" -s break --pipe false 2>" NULL_DEVICE, name);
   FILE *fp = popen(cmd, "r");
   if (!fp)
     return 0;
@@ -951,7 +960,7 @@ static void config_defaults(void) {
 }
 
 static void load_config(void) {
-  const char *home = getenv("HOME");
+  const char *home = get_home_dir();
   if (!home)
     return;
   char path[512];
@@ -1430,20 +1439,68 @@ static void gather_packages(void) {
   if (total > 0)
     snprintf(val, sizeof(val), "%d (brew)", total);
 #elif defined(_WIN32)
+  // winget
+  {
+    FILE *fp = popen("winget list --disable-interactivity 2>" NULL_DEVICE, "r");
+    if (fp) {
+      char buf[512];
+      int past_header = 0;
+      n = 0;
+      while (fgets(buf, sizeof(buf), fp)) {
+        if (!past_header) {
+          // Header/rows are separated by a line of dashes
+          int dashes = 0, len = 0;
+          for (char *c = buf; *c && *c != '\n' && *c != '\r'; c++, len++)
+            if (*c == '-')
+              dashes++;
+          if (len > 0 && dashes == len)
+            past_header = 1;
+          continue;
+        }
+        // Skip blank lines
+        int blank = 1;
+        for (char *c = buf; *c; c++) {
+          if (*c != ' ' && *c != '\t' && *c != '\n' && *c != '\r') {
+            blank = 0;
+            break;
+          }
+        }
+        if (!blank)
+          n++;
+      }
+      pclose(fp);
+      if (n > 0)
+        snprintf(val, sizeof(val), "%d (winget)", n);
+    }
+  }
   // scoop
-  char scoop_path[MAX_PATH] = "";
-  char *userprofile = getenv("USERPROFILE");
-  if (userprofile) {
-    snprintf(scoop_path, sizeof(scoop_path), "%s\\scoop\\apps", userprofile);
-    n = count_subdirs(scoop_path);
-    if (n > 0)
-      snprintf(val, sizeof(val), "%d (scoop)", n);
+  {
+    char scoop_path[MAX_PATH] = "";
+    char *userprofile = getenv("USERPROFILE");
+    if (userprofile) {
+      snprintf(scoop_path, sizeof(scoop_path), "%s\\scoop\\apps", userprofile);
+      n = count_subdirs(scoop_path);
+      if (n > 0) {
+        char scoop_val[32];
+        snprintf(scoop_val, sizeof(scoop_val), "%d (scoop)", n);
+        if (val[0])
+          snprintf(val + strlen(val), sizeof(val) - strlen(val), ", %s", scoop_val);
+        else
+          snprintf(val, sizeof(val), "%s", scoop_val);
+      }
+    }
   }
   // chocolatey
-  if (!val[0]) {
+  {
     n = count_subdirs("C:\\ProgramData\\chocolatey\\lib");
-    if (n > 0)
-      snprintf(val, sizeof(val), "%d (choco)", n);
+    if (n > 0) {
+      char choco_val[32];
+      snprintf(choco_val, sizeof(choco_val), "%d (choco)", n);
+      if (val[0])
+        snprintf(val + strlen(val), sizeof(val) - strlen(val), ", %s", choco_val);
+      else
+        snprintf(val, sizeof(val), "%s", choco_val);
+    }
   }
 #else
   // emerge (Gentoo)
@@ -2090,9 +2147,8 @@ static void gather_gpu(void) {
   if (gpu[0])
     add_info("GPU", "%s", gpu);
 #elif defined(_WIN32)
-  // Enumerate all installed adapters, not just ones currently driving a
-  // monitor — hybrid-graphics laptops (Optimus etc.) often leave the
-  // discrete GPU unattached until something requests it.
+  // Don't filter to attached-only: Optimus laptops leave the dGPU
+  // unattached until something needs it.
   DISPLAY_DEVICEA dd;
   dd.cb = sizeof(dd);
   char seen[8][128];
@@ -2310,8 +2366,7 @@ static void gather_swap(void) {
   ms.dwLength = sizeof(ms);
   if (!GlobalMemoryStatusEx(&ms))
     return;
-  // Windows reports the page file (RAM + swap combined), not swap alone —
-  // approximate swap as page file minus physical RAM.
+  // page file = RAM + swap combined, so subtract RAM to approximate swap
   if (ms.ullTotalPageFile <= ms.ullTotalPhys)
     return;
   long long total = (long long)((ms.ullTotalPageFile - ms.ullTotalPhys) / 1024);
@@ -3298,7 +3353,8 @@ static void set_distro_colors(const char *distro) {
   } else if (strcasecmp(distro, "macos") == 0) {
     color_outer = "\033[1;36m";
     color_inner = "\033[1;37m";
-  } else if (strcasecmp(distro, "windows") == 0) {
+  } else if (strcasecmp(distro, "windows") == 0 ||
+             strncasecmp(distro, "windows ", 8) == 0) {
     color_outer = "\033[1;34m";
     color_inner = "\033[1;37m";
   }
@@ -3577,10 +3633,8 @@ int main(int argc, char **argv) {
 #ifdef _WIN32
   int win_last_rows = 0, win_last_cols = 0;
   get_term_size(&win_last_rows, &win_last_cols);
-  // Debounce state: conpty (Windows Terminal) resizes its buffer
-  // asynchronously in response to our own output, so a size read can be
-  // transiently wrong for a single frame right after we print. Only commit
-  // a resize once the same new size is seen on two consecutive polls.
+  // conpty can report a stale size for one frame right after we write,
+  // so only commit a resize once it reads the same twice in a row
   int win_pending_rows = win_last_rows, win_pending_cols = win_last_cols;
 #endif
 
