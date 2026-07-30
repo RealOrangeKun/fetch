@@ -1,0 +1,10 @@
+rebuild_fetch:
+  steps:
+    - trigger_services:
+        project: home:RealOrangeKun
+        package: fetch
+  filters:
+    event: push
+    branches:
+      only:
+        - main
