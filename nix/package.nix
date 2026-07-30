@@ -9,7 +9,7 @@
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "fetch";
-  version = "2.2.0";
+  version = lib.fileContents ../VERSION;
   __structuredAttrs = true;
   strictDeps = true;
 

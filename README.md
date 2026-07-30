@@ -6,7 +6,7 @@ A donut.c-inspired fetch tool that spins your distro logo in 3D with live-updati
 
 Takes any ASCII/Unicode distro logo, turns each character into a point cloud
 based on its visual density, and renders it as a rotating 3D relief with
-Blinn-Phong shading. System info is gathered natively — no external
+Blinn-Phong shading. System info is gathered natively – no external
 dependencies required. Works on Linux and macOS.
 
 Based on [gentoo.c](https://github.com/areofyl/gentoo.c).
@@ -18,7 +18,7 @@ make
 ./fetch
 ```
 
-Press any key to stop — the keypress passes through to the shell, so it
+Press any key to stop – the keypress passes through to the shell, so it
 works as a startup fetch. Ctrl-C works too.
 
 ## Install
@@ -134,6 +134,8 @@ As for all GURU packages, you will have to add the package in your `package.acce
 
 ## Logos
 
+Custom logos: [docs/custom-logos.md](docs/custom-logos.md)
+
 By default it auto-detects your distro and grabs the logo from fastfetch
 (if installed) with its original per-character colors preserved. Works with
 any of fastfetch's 500+ distro logos!
@@ -159,7 +161,7 @@ Without fastfetch, the built-in Gentoo logo is used.
 
 ## System info
 
-All system info is gathered natively — no fastfetch or neofetch needed:
+All system info is gathered natively – no fastfetch or neofetch needed:
 
 - **OS** - `/etc/os-release`
 - **Host** - `/proc/device-tree/model` or `/sys/class/dmi/id/product_name`
@@ -173,7 +175,7 @@ All system info is gathered natively — no fastfetch or neofetch needed:
 - **CPU** - `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
 - **GPU** - DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
 - **Memory/Swap** - `/proc/meminfo` (Linux), `vm_stat` (macOS)
-- **Disk** - `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS)
+- **Disk** - `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS) – supports multiple mount points via config
 - **Battery** - `energy_now/energy_full` (Linux), IOKit (macOS)
 - **Packages** - emerge, pacman, dpkg, rpm/dnf, xbps, apk, flatpak, brew
 - **Local IP** - `getifaddrs()`
@@ -182,10 +184,12 @@ Stats like memory, battery, and uptime update in real-time while the logo spins.
 
 ## Config
 
+Full reference: [docs/configuration.md](docs/configuration.md)
+
 Create `~/.config/fetch/config` to customize:
 
 ```
-# fields — list to show, in this order
+# fields – list to show, in this order
 # remove or comment out to hide
 os
 host
@@ -209,14 +213,20 @@ battery
 locale
 colors
 
+# extra disks (add more mount points)
+# disk=/home
+# disk=/data
+
 # appearance
 # label_color=magenta   (red, green, yellow, blue, magenta, cyan, white)
 # separator=─           (character for the title separator)
+# shading_mode=ascii    (ascii, or opt into blocks / sextants)
 # shading=.,-~:;=!*#$@  (characters for 3D shading, supports UTF-8)
+# box=0                 (adds a box around the system-data, 0 = off, 1 = on)
 
 # logo colors (override distro defaults)
-# logo_outer=magenta    (outer/heavy character color)
-# logo_inner=white      (inner/light character color)
+# logo_outer=magenta    (extruded side color)
+# logo_inner=white      (front/back face color)
 
 # 3d
 # light=top-left        (top-left, top-right, top, left, right, front, bottom-left, bottom-right)
@@ -238,14 +248,36 @@ colors
 | `--size <float>` | Scale the logo (e.g. 2.0 for double size) |
 | `--depth <float>` | Scale the 3D depth (default 1.0) |
 | `--height <n>` | Override render height in rows |
+| `--box` | Draw a border box around the info block |
 | `--no-info` | Just the logo, no system info |
 | `--no-color` | Disable coloring |
 | `--frames <n>` | Stop after n frames |
 | `--infinite` | Run forever |
+| `--shading-mode <mode>` | `ascii` (default), or opt into sub-cell blocks with `sextants` (2x3) or `blocks` (2x2) |
 | `--shading-chars <str>` | Custom shading ramp, supports UTF-8 |
 | `-h`, `--help` | Show help |
+| `-V`, `--version` | Show version |
 
 CLI flags override config file settings.
+
+## Shading modes
+
+Full reference: [docs/shading-modes.md](docs/shading-modes.md)
+
+ASCII is the default. The sub-cell modes are opt-in, and trade the donut.c look
+for a silhouette that lands on a fraction of a cell instead of snapping to the
+character grid.
+
+| `ascii` (default) | `blocks` | `sextants` |
+|:---:|:---:|:---:|
+| ![ascii](docs/shading-ascii.png) | ![blocks](docs/shading-blocks.png) | ![sextants](docs/shading-sextants.png) |
+| brightness mapped onto `.,-~:;=!*#$@`, one character per cell | coverage sampled 2×2, edges on quadrants | coverage sampled 2×3, edges on block sextants |
+
+`sextants` needs a terminal that draws the Symbols for Legacy Computing block
+(kitty, Ghostty, foot and WezTerm do it themselves, so the font does not matter);
+`blocks` works anywhere with a UTF-8 locale.
+
+Same logo, same frame, same terminal palette in all three.
 
 ## Contributing
 
@@ -258,8 +290,42 @@ If you want to chat about ideas before writing code, reach out on
 
 ## How it works
 
-Each character in the logo gets a weight based on its visual density (`M` is
-heavy, `.` is light, `█` is full, `░` is thin), and that weight becomes a height,
-turning the flat logo into a 3D relief. Surface normals come from the height
-gradient, and everything gets rotated + projected + shaded every frame with a
-z-buffer. Single file C, no deps beyond libm.
+For a deep dive with visuals and code, see the [full blog post](https://areofyl.github.io/blog/post.html?p=how-fetch-works).
+
+1. **Logo loading** – reads ASCII/Unicode art from `~/.config/fetch/logo.txt` or
+   grabs a distro logo via fastfetch. ANSI color codes are parsed and preserved
+   per-character.
+
+2. **Heightmap** – each character gets a weight based on visual density (`@` is
+   heavy, `.` is light, `█` is full, `░` is thin). The weight becomes a Z height,
+   turning the flat logo into a 3D relief map. Logos with low height variance
+   (uniform characters) get their depth auto-scaled so they don't look flat.
+
+3. **Point cloud** – the heightmap is sampled into 3D points. Interior cells get
+   multiple Z layers for a solid extrusion, edge cells get only front and back
+   faces to keep outlines clean.
+
+4. **Surface normals** – computed from the height gradient at each cell using
+   finite differences, giving each point a direction for lighting.
+
+5. **Rotation + projection** – every frame, all points are rotated around X/Y
+   axes, then perspective-projected onto the terminal grid with a z-buffer to
+   handle occlusion.
+
+6. **Shading** – Blinn-Phong lighting (diffuse + specular) gives every visible
+   point a brightness, which maps onto the `.,-~:;=!*#$@` ramp, one character
+   per cell. `--shading-mode sextants` or `blocks` instead samples coverage
+   finer than the character cell – 2×3 or 2×2 – and each cell picks whichever
+   glyph carries the right amount of ink: a shade block (`░▒▓█`) where the cell
+   is filled, a partial block where the silhouette cuts through it. So an edge
+   lands on a fraction of a cell instead of snapping to the character grid.
+
+   Logos that ship their own colors keep them. The rest are two-toned by
+   surface: front and back faces in `logo_inner`, extruded sides in
+   `logo_outer`.
+
+7. **Rendering** – the entire frame is written in a single `write()` syscall to
+   avoid flicker. System info is displayed alongside the animation and
+   fast-changing fields (uptime, memory, swap) update live every second.
+
+Single file C, no dependencies beyond libm.
