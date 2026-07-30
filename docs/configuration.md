@@ -18,6 +18,7 @@ wm
 theme
 icons
 font
+cursor
 terminal
 cpu
 gpu

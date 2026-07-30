@@ -172,6 +172,7 @@ All system info is gathered natively – no fastfetch or neofetch needed:
 - **Display** - per-connector DRM enumeration (multi-monitor)
 - **WM** - process scanning + DE-to-WM mapping
 - **Theme/Icons/Font** - `~/.config/gtk-3.0/settings.ini` (Linux), `defaults read` (macOS)
+- **Cursor** - `~/.config/gtk-3.0/settings.ini` (Linux only)
 - **CPU** - `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
 - **GPU** - DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
 - **Memory/Swap** - `/proc/meminfo` (Linux), `vm_stat` (macOS)
@@ -202,6 +203,7 @@ wm
 theme
 icons
 font
+cursor
 terminal
 cpu
 gpu

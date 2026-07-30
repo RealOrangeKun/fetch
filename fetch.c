@@ -840,6 +840,7 @@ enum {
   F_THEME,
   F_ICONS,
   F_FONT,
+  F_CURSOR,
   F_TERMINAL,
   F_CPU,
   F_GPU,
@@ -894,6 +895,7 @@ static const struct {
                  {"theme", F_THEME},
                  {"icons", F_ICONS},
                  {"font", F_FONT},
+                 {"cursor", F_CURSOR},
                  {"terminal", F_TERMINAL},
                  {"cpu", F_CPU},
                  {"gpu", F_GPU},
@@ -909,9 +911,10 @@ static const struct {
 static void config_defaults(void) {
   // Default order
   int defaults[] = {
-      F_OS,     F_HOST,  F_KERNEL, F_UPTIME, F_PACKAGES, F_SHELL,  F_DISPLAY,
-      F_WM,     F_THEME, F_ICONS,  F_FONT,   F_TERMINAL, F_CPU,    F_GPU,
-      F_MEMORY, F_SWAP,  F_DISK,   F_IP,     F_BATTERY,  F_LOCALE, F_COLORS};
+      F_OS,     F_HOST,  F_KERNEL, F_UPTIME,  F_PACKAGES, F_SHELL,    F_DISPLAY,
+      F_WM,     F_THEME, F_ICONS,  F_FONT,    F_CURSOR,   F_TERMINAL, F_CPU,
+      F_GPU,    F_MEMORY, F_SWAP,  F_DISK,    F_IP,       F_BATTERY,  F_LOCALE,
+      F_COLORS};
   field_count = sizeof(defaults) / sizeof(defaults[0]);
   for (int i = 0; i < field_count; i++) {
     field_order[i] = defaults[i];
@@ -2676,6 +2679,21 @@ static void gather_font(void) {
 #endif
 }
 
+static void gather_cursor(void) {
+#ifndef __APPLE__
+  char cursor[64] = "";
+  read_gtk_setting("gtk-cursor-theme-name", cursor, sizeof(cursor));
+  if (cursor[0]) {
+    char size[16] = "";
+    read_gtk_setting("gtk-cursor-theme-size", size, sizeof(size));
+    if (size[0])
+      add_info("Cursor", "%s (%spx)", cursor, size);
+    else
+      add_info("Cursor", "%s", cursor);
+  }
+#endif
+}
+
 // Render buffers, one entry per sub-cell: z-buffer (0 = empty), luminance, color
 #define SUB_H (MAX_HEIGHT * MAX_SUB_ROWS)
 #define SUB_W (ANIM_WIDTH * MAX_SUB_COLS)
@@ -3136,7 +3154,7 @@ int main(int argc, char **argv) {
           "  Comment out or remove fields to hide them.\n"
           "  Available fields:\n"
           "    os, host, kernel, uptime, packages, shell, display, wm,\n"
-          "    theme, icons, font, terminal, cpu, gpu, memory, swap,\n"
+          "    theme, icons, font, cursor, terminal, cpu, gpu, memory, swap,\n"
           "    disk, ip, battery, locale, colors\n\n"
           "  Extra disks:\n"
           "    disk=/home               Show additional mount point\n"
@@ -3329,6 +3347,7 @@ int main(int argc, char **argv) {
       [F_THEME] = gather_theme,
       [F_ICONS] = gather_icons,
       [F_FONT] = gather_font,
+      [F_CURSOR] = gather_cursor,
       [F_TERMINAL] = gather_terminal,
       [F_CPU] = gather_cpu,
       [F_GPU] = gather_gpu,
