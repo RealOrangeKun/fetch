@@ -2881,8 +2881,11 @@ int main(int argc, char **argv) {
           "  Custom ASCII/Unicode logo. Add '# distro: <name>' as the\n"
           "  first line to set the color scheme.\n");
       return 0;
-    } else if ((strcmp(argv[i], "--logo") == 0 || strcmp(argv[i], "-l") == 0) &&
-               i + 1 < argc) {
+    } else if (strcmp(argv[i], "--logo") == 0 || strcmp(argv[i], "-l") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       logo_name = argv[++i];
     } else if (strcmp(argv[i], "--rotate-x") == 0) {
       rotate_x = 1;
@@ -2890,36 +2893,62 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--rotate-y") == 0) {
       rotate_x = 0;
       rotate_y = 1;
-    } else if ((strcmp(argv[i], "--speed") == 0 ||
-                strcmp(argv[i], "-s") == 0) &&
-               i + 1 < argc) {
+    } else if (strcmp(argv[i], "--speed") == 0 || strcmp(argv[i], "-s") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       speed = atof(argv[++i]);
     } else if (strcmp(argv[i], "--no-info") == 0) {
       show_info = 0;
     } else if (strcmp(argv[i], "--no-color") == 0) {
       use_color = 0;
-    } else if (strcmp(argv[i], "--frames") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--frames") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       max_frames = atoi(argv[++i]);
     } else if (strcmp(argv[i], "--infinite") == 0) {
       max_frames = 0;
-    } else if (strcmp(argv[i], "--shading-chars") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--shading-chars") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       shading = argv[++i];
-    } else if (strcmp(argv[i], "--height") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--height") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       config_height = atoi(argv[++i]);
       if (config_height > MAX_HEIGHT)
         config_height = MAX_HEIGHT;
-    } else if (strcmp(argv[i], "--size") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--size") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       size_scale = atof(argv[++i]);
       if (size_scale < 0.5f)
         size_scale = 0.5f;
       if (size_scale > 5.0f)
         size_scale = 5.0f;
-    } else if (strcmp(argv[i], "--depth") == 0 && i + 1 < argc) {
+    } else if (strcmp(argv[i], "--depth") == 0) {
+      if (i + 1 >= argc) {
+        fprintf(stderr, "fetch: option '%s' requires an argument\n", argv[i]);
+        return 1;
+      }
       config_depth = atof(argv[++i]);
       if (config_depth < 0.1f)
         config_depth = 0.1f;
       if (config_depth > 10.0f)
         config_depth = 10.0f;
+    } else {
+      fprintf(stderr, "fetch: unknown option '%s'\n", argv[i]);
+      fprintf(stderr, "Try 'fetch --help' for more information.\n");
+      return 1;
     }
   }
 
