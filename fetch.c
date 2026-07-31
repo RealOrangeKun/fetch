@@ -1466,7 +1466,7 @@ static void gather_packages(void) {
     if (n > 0)
       snprintf(val, sizeof(val), "%d (dpkg)", n);
   }
-  // rpm/dnf (Fedora, RHEL, openSUSE, etc.)
+  // rpm (Fedora, RHEL, openSUSE, etc.)
   if (!val[0]) {
     FILE *fp = popen("rpm -qa 2>/dev/null", "r");
     if (fp) {
@@ -1476,7 +1476,7 @@ static void gather_packages(void) {
         n++;
       pclose(fp);
       if (n > 0)
-        snprintf(val, sizeof(val), "%d (dnf)", n);
+        snprintf(val, sizeof(val), "%d (rpm)", n);
     }
   }
   // xbps (Void)

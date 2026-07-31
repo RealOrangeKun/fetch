@@ -177,7 +177,7 @@ All system info is gathered natively – no fastfetch or neofetch needed:
 - **Memory/Swap** - `/proc/meminfo` (Linux), `vm_stat` (macOS)
 - **Disk** - `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS) – supports multiple mount points via config
 - **Battery** - `energy_now/energy_full` (Linux), IOKit (macOS)
-- **Packages** - emerge, pacman, dpkg, rpm/dnf, xbps, apk, flatpak, brew
+- **Packages** - emerge, pacman, dpkg, rpm, xbps, apk, flatpak, brew
 - **Local IP** - `getifaddrs()`
 
 Stats like memory, battery, and uptime update in real-time while the logo spins.
