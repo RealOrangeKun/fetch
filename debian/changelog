@@ -1,3 +1,9 @@
+fetch (2.3.0) noble; urgency=medium
+
+  * Update to 2.3.0.
+
+ -- Youssef Tarek <amazingritro66@gmail.com>  Fri, 21 Aug 2026 23:11:10 +0300
+
 fetch (2.2.1) noble; urgency=medium
 
   * Update to 2.2.1.

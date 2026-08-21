@@ -1,5 +1,5 @@
 Name:           fetch
-Version:        2.2.1
+Version:        2.3.0
 Release:        1.%(date +%%Y%%m%%d)%{?dist}
 Summary:        Animated 3D fetch tool for your terminal
 
@@ -32,6 +32,9 @@ config — no external dependencies required.
 %{_bindir}/fetch
 
 %changelog
+* Fri Aug 21 2026 Youssef Tarek <amazingritro66@gmail.com> - 2.3.0-1
+- Update to 2.3.0
+
 * Fri Jul 24 2026 Youssef Tarek <amazingritro66@gmail.com> - 2.2.1-1
 - Update to 2.2.1
 
