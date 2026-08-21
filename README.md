@@ -33,6 +33,8 @@ sudo make install
 <summary><h2>Package managers</h2></summary>
 
 ### Arch Linux (AUR)
+Maintainer: [@PlayRood32](https://github.com/PlayRood32)
+
 You can install `fetch-git` from the AUR using your favorite AUR helper:
 
 ```bash
@@ -43,9 +45,11 @@ or
 paru -S fetch-git
 ```
 
-The `fetch-git` AUR package was not compromised in the AUR package hack. It is maintained and up to date.
+*The `fetch-git` AUR package was not compromised in the AUR package hack. It is maintained and up to date.*
 
 ### Nix
+Maintainer: [@Ghastrum](https://github.com/Ghastrum)
+
 Fetch is available in **[nixpkgs unstable](https://search.nixos.org/packages?channel=unstable&query=fetch#show=fetch)**, or as a [flake](https://github.com/areofyl/fetch/tree/main/nix).
 
 **Try out fetch!**
@@ -64,12 +68,16 @@ environment.systemPackages = [
 ```
 
 ### Homebrew (macOS)
+Maintainer: [@areofyl](https://github.com/areofyl)
+
 ```bash
 brew tap areofyl/fetch
 brew install fetch-git
 ```
 
 ### Fedora Linux
+Maintainer: [@RealOrangeKun](https://github.com/RealOrangeKun)
+
 You can install `fetch` from COPR:
 
 ```bash
@@ -86,6 +94,8 @@ sudo dnf install ~/rpmbuild/RPMS/*/fetch-*.rpm
 ```
 
 ### openSUSE
+Maintainer: [@RealOrangeKun](https://github.com/RealOrangeKun)
+
 You can install `fetch` from the Open Build Service:
 
 ```bash
@@ -103,6 +113,8 @@ sudo zypper install ~/rpmbuild/RPMS/*/fetch-*.rpm
 ```
 
 ### Ubuntu / Debian
+Maintainer: [@RealOrangeKun](https://github.com/RealOrangeKun)
+
 You can install `fetch` from the PPA:
 
 ```bash
@@ -120,6 +132,8 @@ sudo apt install ../fetch_*.deb
 ```
 
 ### Gentoo Linux (GURU)
+Maintainer: [@Leb02](https://github.com/Leb02)
+
 You can install `fetch` from the GURU repository using:
 
 ```bash
@@ -167,18 +181,18 @@ All system info is gathered natively – no fastfetch or neofetch needed:
 - **Host** - `/proc/device-tree/model` or `/sys/class/dmi/id/product_name`
 - **Kernel** - `uname()`
 - **Uptime** - `/proc/uptime`
-- **Packages** - emerge, pacman, dpkg, rpm, xbps, apk
+- **Packages** - emerge, pacman, dpkg, rpm, xbps, apk, flatpak, brew, nixpkgs
 - **Shell** - parent process detection (not just `$SHELL`)
-- **Display** - per-connector DRM enumeration (multi-monitor)
+- **Display** - per-connector DRM enumeration (multi-monitor): active resolution and refresh rate from the CRTC mode, monitor name and physical size from EDID, built-in vs external
 - **WM** - process scanning + DE-to-WM mapping
-- **Theme/Icons/Font** - `~/.config/gtk-3.0/settings.ini` (Linux), `defaults read` (macOS)
+- **Display Manager** - process scanning
+- **Theme/Icons/Font** - `~/.config/gtk-3.0/settings.ini`, `~/.gtkrc-2.0`, and Qt (`qt6ct`/`qt5ct`, `~/.config/kdeglobals`) on Linux, `defaults read` (macOS)
 - **Cursor** - `~/.config/gtk-3.0/settings.ini` (Linux only)
 - **CPU** - `/proc/cpuinfo`, device-tree (Apple Silicon), or `sysctl` (macOS)
 - **GPU** - DRM + `lspci` for full names (Linux), `system_profiler` (macOS)
 - **Memory/Swap** - `/proc/meminfo` (Linux), `vm_stat` (macOS)
 - **Disk** - `statvfs()` + `/proc/mounts` (Linux), `getmntinfo` (macOS) – supports multiple mount points via config
-- **Battery** - `energy_now/energy_full` (Linux), IOKit (macOS)
-- **Packages** - emerge, pacman, dpkg, rpm, xbps, apk, flatpak, brew
+- **Battery** - `energy_now/energy_full` plus `model_name` (Linux), IOKit (macOS)
 - **Local IP** - `getifaddrs()`
 
 Stats like memory, battery, and uptime update in real-time while the logo spins.
@@ -200,6 +214,7 @@ packages
 shell
 display
 wm
+displaymanager
 theme
 icons
 font
@@ -292,7 +307,7 @@ If you want to chat about ideas before writing code, reach out on
 
 ## How it works
 
-For a deep dive with visuals and code, see the [full blog post](https://areofyl.github.io/blog/post.html?p=how-fetch-works).
+For a deep dive with visuals and code, see the [full blog post](https://asdesai.com/blog/how-fetch-works/).
 
 1. **Logo loading** – reads ASCII/Unicode art from `~/.config/fetch/logo.txt` or
    grabs a distro logo via fastfetch. ANSI color codes are parsed and preserved

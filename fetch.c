@@ -1,5 +1,7 @@
 #include <dirent.h>
+#include <fcntl.h>
 #include <math.h>
+#include <stdint.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdarg.h>
@@ -855,6 +857,7 @@ enum {
   F_SHELL,
   F_DISPLAY,
   F_WM,
+  F_DISPLAYMANAGER,
   F_THEME,
   F_ICONS,
   F_FONT,
@@ -910,6 +913,7 @@ static const struct {
                  {"shell", F_SHELL},
                  {"display", F_DISPLAY},
                  {"wm", F_WM},
+                 {"displaymanager", F_DISPLAYMANAGER},
                  {"theme", F_THEME},
                  {"icons", F_ICONS},
                  {"font", F_FONT},
@@ -1367,6 +1371,23 @@ static void gather_os(void) {
 #endif
 }
 
+// Reads the first line of a small pseudo-file (e.g. under /sys or /proc)
+// into out, trimming the trailing newline. Returns 1 on success, 0 if the
+// file couldn't be opened or was empty.
+static int try_read_first_line(const char *path, char *out, int outlen) {
+  out[0] = '\0';
+  FILE *fp = fopen(path, "r");
+  if (!fp)
+    return 0;
+  if (fgets(out, outlen, fp)) {
+    int len = strlen(out);
+    while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
+      out[--len] = '\0';
+  }
+  fclose(fp);
+  return out[0] != '\0';
+}
+
 static void gather_host(void) {
 #ifdef __APPLE__
   char model[128] = "";
@@ -1374,22 +1395,25 @@ static void gather_host(void) {
     add_info("Host", "%s", model);
 #else
   char model[128] = "";
+  char vendor[64] = "";
+
   // Try device-tree first (ARM/Apple Silicon), then DMI (x86)
-  FILE *fp = fopen("/proc/device-tree/model", "r");
-  if (!fp)
-    fp = fopen("/sys/class/dmi/id/product_name", "r");
-  if (fp) {
-    if (fgets(model, sizeof(model), fp)) {
-      int len = strlen(model);
-      while (len > 0 && (model[len - 1] == '\n' || model[len - 1] == '\r' ||
-                         model[len - 1] == '\0'))
-        len--;
-      model[len] = '\0';
-    }
-    fclose(fp);
+  if (!try_read_first_line("/proc/device-tree/model", model, sizeof(model))) {
+    if (try_read_first_line("/sys/class/dmi/id/product_name", model, sizeof(model)))
+      try_read_first_line("/sys/class/dmi/id/sys_vendor", vendor, sizeof(vendor));
   }
-  if (model[0])
-    add_info("Host", "%s", model);
+
+  // Some boards already embed the vendor name in product_name
+  // don't duplicate it if so.
+  if (vendor[0] && strncasecmp(model, vendor, strlen(vendor)) == 0)
+    vendor[0] = '\0';
+
+  if (model[0]) {
+    if (vendor[0])
+      add_info("Host", "%s %s", vendor, model);
+    else
+      add_info("Host", "%s", model);
+  }
 #endif
 }
 
@@ -1712,6 +1736,189 @@ static void gather_shell(void) {
     add_info("Shell", "%s", name);
 }
 
+#ifndef __APPLE__
+struct drm_modeinfo_min {
+  uint32_t clock;
+  uint16_t hdisplay, hsync_start, hsync_end, htotal, hskew;
+  uint16_t vdisplay, vsync_start, vsync_end, vtotal, vscan;
+  uint32_t vrefresh;
+  uint32_t flags;
+  uint32_t type;
+  char name[32];
+};
+
+struct drm_crtc_min {
+  uint64_t set_connectors_ptr;
+  uint32_t count_connectors;
+  uint32_t crtc_id;
+  uint32_t fb_id;
+  uint32_t x, y;
+  uint32_t gamma_size;
+  uint32_t mode_valid;
+  struct drm_modeinfo_min mode;
+};
+
+struct drm_encoder_min {
+  uint32_t encoder_id;
+  uint32_t encoder_type;
+  uint32_t crtc_id;
+  uint32_t possible_crtcs;
+  uint32_t possible_clones;
+};
+
+struct drm_connector_min {
+  uint64_t encoders_ptr, modes_ptr, props_ptr, prop_values_ptr;
+  uint32_t count_modes, count_props, count_encoders;
+  uint32_t encoder_id, connector_id;
+  uint32_t connector_type, connector_type_id;
+  uint32_t connection;
+  uint32_t mm_width, mm_height;
+  uint32_t subpixel;
+  uint32_t pad;
+};
+
+#define DRM_MIN_GETCRTC _IOWR('d', 0xA1, struct drm_crtc_min)
+#define DRM_MIN_GETENCODER _IOWR('d', 0xA6, struct drm_encoder_min)
+#define DRM_MIN_GETCONNECTOR _IOWR('d', 0xA7, struct drm_connector_min)
+
+static int drm_active_mode(const char *card, uint32_t conn_id, int *w, int *h,
+                           float *hz, int *mm_w, int *mm_h) {
+  char dev[64];
+  snprintf(dev, sizeof(dev), "/dev/dri/%s", card);
+  int fd = open(dev, O_RDONLY | O_CLOEXEC);
+  if (fd < 0)
+    return 0;
+
+  struct drm_connector_min conn;
+  memset(&conn, 0, sizeof(conn));
+  conn.connector_id = conn_id;
+  struct drm_modeinfo_min scratch;
+  conn.modes_ptr = (uint64_t)(uintptr_t)&scratch;
+  conn.count_modes = 1;
+  int got = 0;
+  if (ioctl(fd, DRM_MIN_GETCONNECTOR, &conn) == 0) {
+    if (conn.mm_width && conn.mm_height) {
+      *mm_w = (int)conn.mm_width;
+      *mm_h = (int)conn.mm_height;
+    }
+    struct drm_encoder_min enc;
+    memset(&enc, 0, sizeof(enc));
+    enc.encoder_id = conn.encoder_id;
+    if (conn.encoder_id && ioctl(fd, DRM_MIN_GETENCODER, &enc) == 0 &&
+        enc.crtc_id) {
+      struct drm_crtc_min crtc;
+      memset(&crtc, 0, sizeof(crtc));
+      crtc.crtc_id = enc.crtc_id;
+      if (ioctl(fd, DRM_MIN_GETCRTC, &crtc) == 0 && crtc.mode_valid &&
+          crtc.mode.htotal && crtc.mode.vtotal) {
+        *w = crtc.mode.hdisplay;
+        *h = crtc.mode.vdisplay;
+        float r = crtc.mode.clock * 1000.0f /
+                  ((float)crtc.mode.htotal * (float)crtc.mode.vtotal);
+        if (crtc.mode.flags & 0x10)
+          r *= 2.0f;
+        if (crtc.mode.flags & 0x20)
+          r /= 2.0f;
+        if (crtc.mode.vscan > 1)
+          r /= (float)crtc.mode.vscan;
+        *hz = r;
+        got = 1;
+      }
+    }
+  }
+  close(fd);
+  return got;
+}
+
+static int read_edid(const char *conn_dir, unsigned char *edid, size_t max) {
+  char path[320];
+  snprintf(path, sizeof(path), "/sys/class/drm/%s/edid", conn_dir);
+  FILE *fp = fopen(path, "rb");
+  if (!fp)
+    return 0;
+  size_t n = fread(edid, 1, max, fp);
+  fclose(fp);
+  if (n < 128)
+    return 0;
+  static const unsigned char hdr[8] = {0x00, 0xFF, 0xFF, 0xFF,
+                                       0xFF, 0xFF, 0xFF, 0x00};
+  return memcmp(edid, hdr, 8) == 0;
+}
+
+static void edid_name(const unsigned char *e, char *out, size_t outsz) {
+  out[0] = '\0';
+  for (int i = 54; i <= 108; i += 18) {
+    const unsigned char *d = e + i;
+    if (d[0] || d[1] || d[2] || d[3] != 0xFC)
+      continue;
+    size_t n = 0;
+    for (int j = 5; j < 18 && n + 1 < outsz; j++) {
+      if (d[j] == 0x0A)
+        break;
+      out[n++] = (char)d[j];
+    }
+    while (n > 0 && out[n - 1] == ' ')
+      n--;
+    out[n] = '\0';
+    if (out[0])
+      return;
+  }
+  unsigned v = ((unsigned)e[8] << 8) | e[9];
+  char m[4] = {(char)('A' + ((v >> 10) & 0x1F) - 1),
+               (char)('A' + ((v >> 5) & 0x1F) - 1),
+               (char)('A' + (v & 0x1F) - 1), '\0'};
+  for (int i = 0; i < 3; i++)
+    if (m[i] < 'A' || m[i] > 'Z')
+      return;
+  snprintf(out, outsz, "%s%02X%02X", m, e[11], e[10]);
+}
+
+static void edid_size_mm(const unsigned char *e, int *w, int *h) {
+  const unsigned char *d = e + 54;
+  if (d[0] || d[1]) {
+    int mw = d[12] | ((d[14] & 0xF0) << 4);
+    int mh = d[13] | ((d[14] & 0x0F) << 8);
+    if (mw > 0 && mh > 0) {
+      *w = mw;
+      *h = mh;
+      return;
+    }
+  }
+  if (e[21] && e[22]) {
+    *w = e[21] * 10;
+    *h = e[22] * 10;
+  }
+}
+
+static float edid_refresh(const unsigned char *e) {
+  const unsigned char *d = e + 54;
+  unsigned clock = d[0] | ((unsigned)d[1] << 8);
+  if (!clock)
+    return 0;
+  unsigned htotal = (d[2] | ((d[4] & 0xF0) << 4)) + (d[3] | ((d[4] & 0x0F) << 8));
+  unsigned vtotal = (d[5] | ((d[7] & 0xF0) << 4)) + (d[6] | ((d[7] & 0x0F) << 8));
+  if (!htotal || !vtotal)
+    return 0;
+  return clock * 10000.0f / (float)(htotal * vtotal);
+}
+
+static void format_hz(float hz, char *out, size_t outsz) {
+  if (hz <= 0.0f) {
+    out[0] = '\0';
+    return;
+  }
+  if (fabsf(hz - roundf(hz)) < 0.05f)
+    snprintf(out, outsz, "%.0f Hz", hz);
+  else
+    snprintf(out, outsz, "%.2f Hz", hz);
+}
+
+static int connector_is_internal(const char *conn) {
+  return strncmp(conn, "eDP", 3) == 0 || strncmp(conn, "LVDS", 4) == 0 ||
+         strncmp(conn, "DSI", 3) == 0;
+}
+#endif
+
 static void gather_display(void) {
 #ifdef __APPLE__
   FILE *fp = popen("system_profiler SPDisplaysDataType 2>/dev/null", "r");
@@ -1766,7 +1973,7 @@ static void gather_display(void) {
     if (!dash)
       continue;
 
-    char path[256];
+    char path[320];
     snprintf(path, sizeof(path), "/sys/class/drm/%s/status", ent->d_name);
     FILE *fp = fopen(path, "r");
     if (!fp)
@@ -1795,7 +2002,61 @@ static void gather_display(void) {
     if (!mode[0])
       continue;
 
-    add_info("Display", "%s @ %s", dash + 1, mode);
+    const char *conn = dash + 1;
+    char card[32];
+    size_t card_len = (size_t)(dash - ent->d_name);
+    if (card_len >= sizeof(card))
+      continue;
+    memcpy(card, ent->d_name, card_len);
+    card[card_len] = '\0';
+
+    unsigned char edid[256];
+    int have_edid = read_edid(ent->d_name, edid, sizeof(edid));
+
+    int w = 0, h = 0, mm_w = 0, mm_h = 0;
+    float hz = 0.0f;
+    unsigned conn_id = 0;
+    snprintf(path, sizeof(path), "/sys/class/drm/%s/connector_id",
+             ent->d_name);
+    fp = fopen(path, "r");
+    if (fp) {
+      if (fscanf(fp, "%u", &conn_id) != 1)
+        conn_id = 0;
+      fclose(fp);
+    }
+    if (conn_id)
+      drm_active_mode(card, conn_id, &w, &h, &hz, &mm_w, &mm_h);
+
+    if (hz <= 0.0f && have_edid)
+      hz = edid_refresh(edid);
+    if ((!mm_w || !mm_h) && have_edid)
+      edid_size_mm(edid, &mm_w, &mm_h);
+
+    char res[32];
+    if (w > 0 && h > 0)
+      snprintf(res, sizeof(res), "%dx%d", w, h);
+    else
+      snprintf(res, sizeof(res), "%s", mode);
+
+    char label[80];
+    char name[32] = "";
+    if (have_edid)
+      edid_name(edid, name, sizeof(name));
+    snprintf(label, sizeof(label), "Display (%s)", name[0] ? name : conn);
+
+    char inches[16] = "";
+    if (mm_w > 0 && mm_h > 0) {
+      int diag = (int)lroundf(
+          sqrtf((float)(mm_w * mm_w + mm_h * mm_h)) / 25.4f);
+      if (diag > 0)
+        snprintf(inches, sizeof(inches), " in %d\"", diag);
+    }
+    char rate[32];
+    format_hz(hz, rate, sizeof(rate));
+    const char *sep = rate[0] ? (inches[0] ? ", " : " @ ") : "";
+
+    add_info(label, "%s%s%s%s [%s]", res, inches, sep, rate,
+             connector_is_internal(conn) ? "Built-in" : "External");
     emitted++;
   }
   closedir(d);
@@ -1807,7 +2068,7 @@ static void gather_display(void) {
     while ((ent = readdir(d))) {
       if (strncmp(ent->d_name, "card", 4) != 0)
         continue;
-      char path[256];
+      char path[320];
       snprintf(path, sizeof(path), "/sys/class/drm/%s/modes", ent->d_name);
       FILE *fp = fopen(path, "r");
       if (!fp)
@@ -1932,6 +2193,64 @@ static void gather_wm(void) {
 #endif
 }
 
+static void gather_displaymanager(void) {
+#ifndef __APPLE__
+  static const char *known_dms[] = {"sddm",    "gdm",   "gdm3", "lightdm",
+                                    "lxdm",    "greetd", "xdm",  "slim",
+                                    "lemurs",  "ly",    NULL};
+  static const struct {
+    const char *id;
+    const char *label;
+  } labels[] = {
+      {"sddm", "SDDM"},       {"gdm", "GDM"},         {"gdm3", "GDM"},
+      {"lightdm", "LightDM"}, {"lxdm", "LXDM"},       {"greetd", "greetd"},
+      {"xdm", "XDM"},         {"slim", "SLiM"},       {"lemurs", "lemurs"},
+      {"ly", "ly"},           {NULL, NULL},
+  };
+  const char *matched_id = NULL;
+
+  // Scan running processes, portable across init systems (works on
+  // Gentoo/OpenRC, runit, s6, etc.), and reflects what's running
+  // right now rather than what's just enabled.
+  DIR *proc = opendir("/proc");
+  if (proc) {
+    struct dirent *ent;
+    while ((ent = readdir(proc)) && !matched_id) {
+      if (ent->d_name[0] < '1' || ent->d_name[0] > '9')
+        continue;
+      char path[64];
+      snprintf(path, sizeof(path), "/proc/%s/comm", ent->d_name);
+      FILE *fp = fopen(path, "r");
+      if (!fp)
+        continue;
+      char comm[64] = "";
+      if (fgets(comm, sizeof(comm), fp)) {
+        int len = strlen(comm);
+        while (len > 0 && (comm[len - 1] == '\n' || comm[len - 1] == '\r'))
+          comm[--len] = '\0';
+        for (int i = 0; known_dms[i]; i++) {
+          if (strcmp(comm, known_dms[i]) == 0) {
+            matched_id = known_dms[i];
+            break;
+          }
+        }
+      }
+      fclose(fp);
+    }
+    closedir(proc);
+  }
+
+  if (matched_id) {
+    for (int i = 0; labels[i].id; i++) {
+      if (strcmp(labels[i].id, matched_id) == 0) {
+        add_info("Display Manager", "%s", labels[i].label);
+        break;
+      }
+    }
+  }
+#endif
+}
+
 static void gather_cpu(void) {
 #ifdef __APPLE__
   char name[128] = "";
@@ -1969,6 +2288,9 @@ static void gather_cpu(void) {
           if (len > 0 && len < (int)sizeof(name)) {
             memcpy(name, val, len);
             name[len] = '\0';
+            char *at = strstr(name, " @ ");
+            if (at)
+              *at = '\0';
           }
         }
       }
@@ -2614,15 +2936,40 @@ static void gather_battery(void) {
     }
   }
 
+  char model[64] = "";
+  snprintf(path, sizeof(path), "/sys/class/power_supply/%s/model_name",
+           bat_name);
+  fp = fopen(path, "r");
+  if (!fp) {
+    snprintf(path, sizeof(path), "/sys/class/power_supply/%s/manufacturer",
+             bat_name);
+    fp = fopen(path, "r");
+  }
+  if (fp) {
+    if (fgets(model, sizeof(model), fp)) {
+      int len = strlen(model);
+      while (len > 0 && (model[len - 1] == '\n' || model[len - 1] == '\r' ||
+                         model[len - 1] == ' '))
+        model[--len] = '\0';
+    }
+    fclose(fp);
+  }
+
+  char label[80];
+  if (model[0])
+    snprintf(label, sizeof(label), "Battery (%s)", model);
+  else
+    snprintf(label, sizeof(label), "Battery");
+
   if (capacity >= 0) {
     const char *color = capacity >= 50 ? "32" : capacity >= 20 ? "93" : "31";
     if (time_str[0] && status[0])
-      add_info("Battery", "\033[%sm%d%%\033[0m (%s) [%s]", color, capacity,
+      add_info(label, "\033[%sm%d%%\033[0m (%s) [%s]", color, capacity,
                time_str, status);
     else if (status[0])
-      add_info("Battery", "\033[%sm%d%%\033[0m [%s]", color, capacity, status);
+      add_info(label, "\033[%sm%d%%\033[0m [%s]", color, capacity, status);
     else
-      add_info("Battery", "\033[%sm%d%%\033[0m", color, capacity);
+      add_info(label, "\033[%sm%d%%\033[0m", color, capacity);
   }
 #endif
 }
@@ -2888,30 +3235,176 @@ static void gather_locale(void) {
     add_info("Locale", "%s", lang);
 }
 
-static void read_gtk_setting(const char *key, char *out, int maxlen) {
-  char path[512];
-  const char *home = getenv("HOME");
-  if (!home)
-    return;
-  snprintf(path, sizeof(path), "%s/.config/gtk-3.0/settings.ini", home);
+static int read_ini_key(const char *path, const char *section, const char *key,
+                        char *out, int maxlen) {
   FILE *fp = fopen(path, "r");
   if (!fp)
-    return;
-  char buf[256];
-  int keylen = strlen(key);
+    return 0;
+  char buf[512];
+  size_t keylen = strlen(key);
+  size_t seclen = section ? strlen(section) : 0;
+  int in_section = section ? 0 : 1;
+  int found = 0;
   while (fgets(buf, sizeof(buf), fp)) {
-    if (strncmp(buf, key, keylen) == 0 && buf[keylen] == '=') {
-      char *val = buf + keylen + 1;
-      int len = strlen(val);
-      while (len > 0 && (val[len - 1] == '\n' || val[len - 1] == '\r'))
-        val[--len] = '\0';
-      if (len > 0 && len < maxlen) {
-        memcpy(out, val, len + 1);
-      }
-      break;
+    char *line = buf;
+    while (*line == ' ' || *line == '\t')
+      line++;
+    int len = strlen(line);
+    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r' ||
+                       line[len - 1] == ' ' || line[len - 1] == '\t'))
+      line[--len] = '\0';
+    if (line[0] == '[') {
+      if (section)
+        in_section = strncmp(line + 1, section, seclen) == 0 &&
+                     line[1 + seclen] == ']';
+      continue;
     }
+    if (!in_section || strncmp(line, key, keylen) != 0)
+      continue;
+    char *val = line + keylen;
+    while (*val == ' ' || *val == '\t')
+      val++;
+    if (*val != '=')
+      continue;
+    val++;
+    while (*val == ' ' || *val == '\t')
+      val++;
+    int vlen = strlen(val);
+    if (vlen >= 2 && ((val[0] == '"' && val[vlen - 1] == '"') ||
+                      (val[0] == '\'' && val[vlen - 1] == '\''))) {
+      val[vlen - 1] = '\0';
+      val++;
+      vlen -= 2;
+    }
+    if (vlen > 0 && vlen < maxlen) {
+      memcpy(out, val, vlen + 1);
+      found = 1;
+    }
+    break;
   }
   fclose(fp);
+  return found;
+}
+
+static int read_gtk3_setting(const char *key, char *out, int maxlen) {
+  const char *home = getenv("HOME");
+  if (!home)
+    return 0;
+  char path[512];
+  snprintf(path, sizeof(path), "%s/.config/gtk-3.0/settings.ini", home);
+  return read_ini_key(path, NULL, key, out, maxlen);
+}
+
+static int read_gtk2_setting(const char *key, char *out, int maxlen) {
+  const char *home = getenv("HOME");
+  if (!home)
+    return 0;
+  char path[512];
+  snprintf(path, sizeof(path), "%s/.gtkrc-2.0", home);
+  if (read_ini_key(path, NULL, key, out, maxlen))
+    return 1;
+  snprintf(path, sizeof(path), "%s/.config/gtk-2.0/gtkrc", home);
+  return read_ini_key(path, NULL, key, out, maxlen);
+}
+
+static void read_gtk_setting(const char *key, char *out, int maxlen) {
+  read_gtk3_setting(key, out, maxlen);
+}
+
+static int qtct_conf_path(char *out, size_t outsz) {
+  const char *home = getenv("HOME");
+  if (!home)
+    return 0;
+  static const char *variants[] = {"qt6ct/qt6ct.conf", "qt5ct/qt5ct.conf",
+                                   NULL};
+  const char *platform = getenv("QT_QPA_PLATFORMTHEME");
+  if (platform && strncmp(platform, "qt", 2) == 0) {
+    snprintf(out, outsz, "%s/.config/%s/%s.conf", home, platform, platform);
+    if (access(out, R_OK) == 0)
+      return 1;
+  }
+  for (int i = 0; variants[i]; i++) {
+    snprintf(out, outsz, "%s/.config/%s", home, variants[i]);
+    if (access(out, R_OK) == 0)
+      return 1;
+  }
+  return 0;
+}
+
+static int read_kdeglobals(const char *section, const char *key, char *out,
+                           int maxlen) {
+  const char *home = getenv("HOME");
+  if (!home)
+    return 0;
+  char path[512];
+  snprintf(path, sizeof(path), "%s/.config/kdeglobals", home);
+  return read_ini_key(path, section, key, out, maxlen);
+}
+
+static void qt_theme(char *out, int maxlen) {
+  char path[512];
+  if (qtct_conf_path(path, sizeof(path)) &&
+      read_ini_key(path, "Appearance", "style", out, maxlen) && out[0])
+    return;
+  if (read_kdeglobals("KDE", "widgetStyle", out, maxlen) && strstr(out, "ct-style"))
+    out[0] = '\0';
+}
+
+static void qt_icons(char *out, int maxlen) {
+  char path[512];
+  if (qtct_conf_path(path, sizeof(path)) &&
+      read_ini_key(path, "Appearance", "icon_theme", out, maxlen) && out[0])
+    return;
+  read_kdeglobals("Icons", "Theme", out, maxlen);
+}
+
+static void font_pt_format(char *font, size_t fontsz) {
+  char *last = strrchr(font, ' ');
+  if (!last || !last[1])
+    return;
+  for (const char *p = last + 1; *p; p++)
+    if (*p < '0' || *p > '9')
+      return;
+  char size[16];
+  snprintf(size, sizeof(size), "%s", last + 1);
+  size_t room = fontsz - (size_t)(last - font);
+  snprintf(last, room, " (%spt)", size);
+}
+
+static void qt_font(char *out, int maxlen) {
+  char path[512];
+  char raw[192] = "";
+  if (!qtct_conf_path(path, sizeof(path)))
+    return;
+  if (!read_ini_key(path, "Fonts", "general", raw, sizeof(raw)) || !raw[0])
+    return;
+  char *comma = strchr(raw, ',');
+  if (!comma)
+    return;
+  *comma = '\0';
+  char *size = comma + 1;
+  char *end = strchr(size, ',');
+  if (end)
+    *end = '\0';
+  snprintf(out, maxlen, "%s (%spt)", raw, size);
+}
+
+static void append_tagged(char *dst, size_t dstsz, const char *val,
+                          const char *tag) {
+  if (!val[0])
+    return;
+  size_t n = strlen(dst);
+  snprintf(dst + n, dstsz - n, "%s%s [%s]", n ? ", " : "", val, tag);
+}
+
+static void append_gtk_pair(char *dst, size_t dstsz, const char *gtk2,
+                            const char *gtk3) {
+  if (gtk2[0] && gtk3[0] && strcmp(gtk2, gtk3) == 0) {
+    append_tagged(dst, dstsz, gtk3, "GTK2/3");
+    return;
+  }
+  append_tagged(dst, dstsz, gtk2, "GTK2");
+  append_tagged(dst, dstsz, gtk3, "GTK3");
 }
 
 static void gather_theme(void) {
@@ -2930,10 +3423,14 @@ static void gather_theme(void) {
   else
     add_info("Theme", "Light");
 #else
-  char theme[64] = "";
-  read_gtk_setting("gtk-theme-name", theme, sizeof(theme));
-  if (theme[0])
-    add_info("Theme", "%s [GTK3]", theme);
+  char qt[64] = "", gtk2[64] = "", gtk3[64] = "", out[256] = "";
+  qt_theme(qt, sizeof(qt));
+  read_gtk2_setting("gtk-theme-name", gtk2, sizeof(gtk2));
+  read_gtk3_setting("gtk-theme-name", gtk3, sizeof(gtk3));
+  append_tagged(out, sizeof(out), qt, "Qt");
+  append_gtk_pair(out, sizeof(out), gtk2, gtk3);
+  if (out[0])
+    add_info("Theme", "%s", out);
 #endif
 }
 
@@ -2941,10 +3438,14 @@ static void gather_icons(void) {
 #ifdef __APPLE__
   add_info("Icons", "System");
 #else
-  char icons[64] = "";
-  read_gtk_setting("gtk-icon-theme-name", icons, sizeof(icons));
-  if (icons[0])
-    add_info("Icons", "%s [GTK3]", icons);
+  char qt[64] = "", gtk2[64] = "", gtk3[64] = "", out[256] = "";
+  qt_icons(qt, sizeof(qt));
+  read_gtk2_setting("gtk-icon-theme-name", gtk2, sizeof(gtk2));
+  read_gtk3_setting("gtk-icon-theme-name", gtk3, sizeof(gtk3));
+  append_tagged(out, sizeof(out), qt, "Qt");
+  append_gtk_pair(out, sizeof(out), gtk2, gtk3);
+  if (out[0])
+    add_info("Icons", "%s", out);
 #endif
 }
 
@@ -2962,10 +3463,16 @@ static void gather_font(void) {
   if (font[0])
     add_info("Font", "%s", font);
 #else
-  char font[128] = "";
-  read_gtk_setting("gtk-font-name", font, sizeof(font));
-  if (font[0])
-    add_info("Font", "%s [GTK3]", font);
+  char qt[128] = "", gtk2[128] = "", gtk3[128] = "", out[448] = "";
+  qt_font(qt, sizeof(qt));
+  read_gtk2_setting("gtk-font-name", gtk2, sizeof(gtk2));
+  read_gtk3_setting("gtk-font-name", gtk3, sizeof(gtk3));
+  font_pt_format(gtk2, sizeof(gtk2));
+  font_pt_format(gtk3, sizeof(gtk3));
+  append_tagged(out, sizeof(out), qt, "Qt");
+  append_gtk_pair(out, sizeof(out), gtk2, gtk3);
+  if (out[0])
+    add_info("Font", "%s", out);
 #endif
 }
 
@@ -3053,14 +3560,14 @@ static void apply_layout(int show_info) {
     rows--; // leave 1 row margin to prevent scroll-jitter
 
   // Ideal height: config/flag override > auto-fit to info lines > default
-  int ideal = 36;
+  int ideal = (int)(36 * size_scale);
   if (config_height > 0) {
     ideal = config_height;
   } else if (show_info && fetch_line_count > 0) {
     int info_height = fetch_line_count + 2;
-    ideal = info_height > 36 ? info_height : 36;
+    if (ideal < info_height)
+      ideal = info_height;
   }
-  ideal = (int)(ideal * size_scale);
   if (ideal < 20)
     ideal = 20;
   if (ideal > MAX_HEIGHT)
@@ -3444,8 +3951,8 @@ int main(int argc, char **argv) {
           "  Comment out or remove fields to hide them.\n"
           "  Available fields:\n"
           "    os, host, kernel, uptime, packages, shell, display, wm,\n"
-          "    theme, icons, font, cursor, terminal, cpu, gpu, memory, swap,\n"
-          "    disk, ip, battery, locale, colors\n\n"
+          "    displaymanager, theme, icons, font, cursor, terminal, cpu,\n"
+          "    gpu, memory, swap, disk, ip, battery, locale, colors\n\n"
           "  Extra disks:\n"
           "    disk=/home               Show additional mount point\n"
           "    disk=/data               (repeat for multiple mounts)\n\n"
@@ -3634,6 +4141,7 @@ int main(int argc, char **argv) {
       [F_SHELL] = gather_shell,
       [F_DISPLAY] = gather_display,
       [F_WM] = gather_wm,
+      [F_DISPLAYMANAGER] = gather_displaymanager,
       [F_THEME] = gather_theme,
       [F_ICONS] = gather_icons,
       [F_FONT] = gather_font,
