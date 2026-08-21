@@ -4054,8 +4054,7 @@ int main(int argc, char **argv) {
     } else if (strcmp(argv[i], "--box") == 0) {
       box_flag = 1;
     } else {
-      fprintf(stderr, "fetch: unknown option '%s'\n", argv[i]);
-      fprintf(stderr, "Try 'fetch --help' for more information.\n");
+      fprintf(stderr, "unknown option: %s\nTry 'fetch --help'\n", argv[i]);
       return 1;
     }
   }
